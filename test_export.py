@@ -4,10 +4,16 @@ Run from the kalshi-monitor directory with the venv active:
   python3 test_export.py
 """
 import os
-# Uncomment if running from Cursor's run button (env vars not sourced from .zshrc)
-os.environ["AIRTABLE_API_KEY"] = "patMYeEEYpM7fCkPg.740b53a02a317f7763eb228e8abe4cd127e8c20c5441dd6a59966693eb6a3eac"
-os.environ["AIRTABLE_BASE_ID"] = "app2uFgJfDU42ZKOm"
-os.environ["KALSHI_API_KEY"]   = "bb1e5387-756f-4434-8c3a-dfde46018d35"
+
+required_vars = ("AIRTABLE_API_KEY", "AIRTABLE_BASE_ID")
+missing = [name for name in required_vars if not os.environ.get(name)]
+if missing:
+    raise RuntimeError(
+        "Missing required environment variable(s): "
+        + ", ".join(missing)
+        + ". Export them before running test_export.py."
+    )
+
 from kalshi_export import get_market_data, get_formatted_report
 
 # ── Test 1: Formatted report ───────────────────────────────────────────────
