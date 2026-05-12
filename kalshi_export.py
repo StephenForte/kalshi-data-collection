@@ -22,6 +22,10 @@ AIRTABLE_BASE_ID = os.environ["AIRTABLE_BASE_ID"]
 # How many days of history to include in trend data
 TREND_DAYS = 14
 
+# How many days back to include already-past annotations (so recent events
+# still show on the trendline chart after they resolve)
+ANNOTATION_LOOKBACK_DAYS = 14
+
 # FF_Rate: only show the nearest upcoming meeting
 FF_RATE_NEAREST_ONLY = True
 
@@ -54,6 +58,42 @@ def get_airtable_records():
     return [r["fields"] for r in records]
 
 
+def get_annotations():
+    """
+    Fetch all Event_Annotations records, returning those within the window:
+    - Up to ANNOTATION_LOOKBACK_DAYS in the past
+    - Any future date
+    Returns list of dicts keyed by market_type.
+    """
+    api = Api(AIRTABLE_API_KEY)
+    table = api.base(AIRTABLE_BASE_ID).table("Event_Annotations")
+    records = table.all(sort=["event_date"])
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ANNOTATION_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    from collections import defaultdict
+    by_market = defaultdict(list)
+
+    for r in records:
+        fields = r.get("fields", {})
+        event_date = fields.get("event_date", "")
+        market_type = fields.get("market_type", "")
+        if not event_date or not market_type:
+            continue
+        # Include if within lookback window or in the future
+        if event_date >= cutoff:
+            by_market[market_type].append({
+                "event_date":  event_date,
+                "label":       fields.get("label", ""),
+                "type":        fields.get("type", ""),
+                "notes":       fields.get("notes", ""),
+                "is_past":     event_date < today,
+            })
+
+    return by_market
+
+
 # ── Data Processing ───────────────────────────────────────────────────────────
 
 def process_records(records):
@@ -78,10 +118,12 @@ def process_records(records):
         # For FF_Rate, pick the contract_series with the smallest days_to_event
         # from the most recent records (nearest upcoming meeting)
         if market_type == "FF_Rate" and FF_RATE_NEAREST_ONLY:
-            # Find the nearest series based on latest record's days_to_event
+            # Find the nearest series with days_to_event > 0 (exclude resolved/today)
             def nearest_days(series_records):
                 latest = max(series_records, key=lambda r: r.get("timestamp", ""))
-                return latest.get("days_to_event", 9999)
+                days = latest.get("days_to_event", 9999)
+                # Treat 0 as resolved — push to back so it won't be selected
+                return days if days > 0 else 9999
 
             nearest_series = min(series_dict.keys(), key=lambda s: nearest_days(series_dict[s]))
             series_dict = {nearest_series: series_dict[nearest_series]}
@@ -99,11 +141,13 @@ def process_records(records):
 
         latest = all_records[-1]
 
-        # Build trend: one entry per record (timestamp + implied_mean)
+        # Build trend: one entry per record (timestamp + implied_mean + moments)
         trend = [
             {
-                "timestamp": r.get("timestamp"),
+                "timestamp":    r.get("timestamp"),
                 "implied_mean": r.get("implied_mean"),
+                "std_dev":      r.get("std_dev"),
+                "skewness":     r.get("skewness"),
             }
             for r in all_records
             if r.get("implied_mean") is not None
@@ -112,8 +156,10 @@ def process_records(records):
         markets_out[market_type] = {
             "label":              MARKET_LABELS.get(market_type, market_type),
             "contract_series":    latest.get("contract_series"),
-            "latest_run":         latest.get("timestamp"),
+            "latest_run":        latest.get("timestamp"),
             "implied_mean":       latest.get("implied_mean"),
+            "std_dev":            latest.get("std_dev"),
+            "skewness":           latest.get("skewness"),
             "market_volume_usd":  latest.get("market_volume_usd"),
             "days_to_event":      latest.get("days_to_event"),
             "is_probability":     market_type in PROBABILITY_MARKETS,
@@ -200,11 +246,17 @@ def get_market_data():
     {
       "generated_at": "...",
       "trend_days": 14,
-      "markets": { market_type: { ... } }
+      "markets": { market_type: { ..., "annotations": [...] } }
     }
     """
     records = get_airtable_records()
     markets = process_records(records)
+    annotations = get_annotations()
+
+    # Attach annotations to each market
+    for market_type, market_data in markets.items():
+        market_data["annotations"] = annotations.get(market_type, [])
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "trend_days":   TREND_DAYS,
@@ -242,6 +294,20 @@ def get_formatted_report():
         lines.append(f"  LAST RUN          {fmt_timestamp(m['latest_run'])}")
         lines.append(f"  TREND             {trend_summary(market_type, m['trend'])}")
         lines.append(f"  READINGS          {len(m['trend'])} in last {data['trend_days']} days")
+        if m.get("std_dev") is not None:
+            lines.append(f"  STD DEV           {m['std_dev']:.4f}")
+        if m.get("skewness") is not None:
+            skew_dir = "right-skewed" if m["skewness"] > 0.1 else ("left-skewed" if m["skewness"] < -0.1 else "symmetric")
+            lines.append(f"  SKEWNESS          {m['skewness']:.4f}  ({skew_dir})")
+        annotations = m.get("annotations", [])
+        if annotations:
+            upcoming = [a for a in annotations if not a.get("is_past")]
+            past     = [a for a in annotations if a.get("is_past")]
+            if upcoming:
+                next_ann = upcoming[0]
+                lines.append(f"  NEXT EVENT        {next_ann['event_date']}  {next_ann['label']}")
+            if past:
+                lines.append(f"  RECENT EVENTS     {', '.join(a['label'] for a in past[-2:])}")
 
     lines.append("")
     lines.append("=" * 60)
