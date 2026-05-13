@@ -4,6 +4,9 @@ Pulls the last TREND_DAYS of Dashboard_Summary records from Airtable
 and outputs a structured market snapshot — current implied mean, volume,
 days to event, and historical trend data for each market.
 
+Also pulls the full Accuracy_Log table and groups it by market type
+so the dashboard can render forecast-vs-actual history.
+
 Run directly:   python3 kalshi_export.py
 Import:         from kalshi_export import get_market_data
 CoWork:         call get_formatted_report() for display output
@@ -41,6 +44,18 @@ MARKET_LABELS = {
 
 # Markets where implied_mean is a probability (0-1), not a level
 PROBABILITY_MARKETS = {"Recession", "FF_Rate"}
+
+# Day-of-release MAE benchmarks from Diercks, Katz, Wright (FEDS 2026-010),
+# Table 3. Kalshi Mean column. Used as a reference point in the accuracy
+# block; null where the paper doesn't publish a comparable number.
+FED_PAPER_MAE = {
+    "CPI":          0.069,   # Headline CPI YoY
+    "Core_CPI_MoM": 0.070,   # Core CPI
+    "FF_Rate":      0.010,   # Fed Funds Rate
+    "Payrolls":     None,
+    "GDP":          None,
+    "Recession":    None,
+}
 
 # ── Data Fetch ────────────────────────────────────────────────────────────────
 
@@ -92,6 +107,14 @@ def get_annotations():
             })
 
     return by_market
+
+
+def get_accuracy_records():
+    """Fetch all Accuracy_Log records, sorted by release_date ascending."""
+    api = Api(AIRTABLE_API_KEY)
+    table = api.base(AIRTABLE_BASE_ID).table("Accuracy_Log")
+    records = table.all(sort=["release_date"])
+    return [r.get("fields", {}) for r in records]
 
 
 # ── Data Processing ───────────────────────────────────────────────────────────
@@ -167,6 +190,85 @@ def process_records(records):
         }
 
     return markets_out
+
+
+def process_accuracy(records):
+    """
+    Group Accuracy_Log records by market_type and compute summary stats.
+
+    Returns a dict keyed by market_type, e.g.:
+    {
+      "CPI": {
+        "label": "CPI (YoY)",
+        "release_count": 2,
+        "mae": 0.075,
+        "rmse": 0.092,
+        "fed_paper_mae": 0.069,
+        "releases": [
+          {"release_date": "2026-04-09", "kalshi_implied_mean": 0.21,
+           "actual_value": 0.20, "error": 0.01, "abs_error": 0.01,
+           "days_before": 3, "readings_in_window": 12,
+           "run_date": "2026-04-12", "contract_series": "..."},
+          ...
+        ]
+      },
+      ...
+    }
+    Releases are sorted most-recent first to match dashboard render order.
+    """
+    from collections import defaultdict
+
+    by_market = defaultdict(list)
+    for r in records:
+        market_type = r.get("market_type")
+        if not market_type:
+            continue
+        by_market[market_type].append(r)
+
+    out = {}
+    for market_type, recs in by_market.items():
+        # Sort releases ascending for stats, then reverse for display
+        recs_sorted = sorted(recs, key=lambda r: r.get("release_date", ""))
+
+        releases = []
+        abs_errors = []
+        sq_errors = []
+        for r in recs_sorted:
+            kalshi = r.get("kalshi_implied_mean")
+            actual = r.get("actual_value")
+            err = r.get("error")
+            abs_err = r.get("abs_error")
+
+            releases.append({
+                "release_date":        r.get("release_date"),
+                "run_date":            r.get("run_date"),
+                "contract_series":     r.get("contract_series"),
+                "kalshi_implied_mean": kalshi,
+                "actual_value":        actual,
+                "error":               err,
+                "abs_error":           abs_err,
+                "days_before":         r.get("days_before"),
+                "readings_in_window":  r.get("readings_in_window"),
+            })
+
+            if abs_err is not None:
+                abs_errors.append(abs_err)
+                sq_errors.append(abs_err * abs_err)
+
+        n = len(abs_errors)
+        mae = sum(abs_errors) / n if n else None
+        rmse = (sum(sq_errors) / n) ** 0.5 if n else None
+
+        out[market_type] = {
+            "label":          MARKET_LABELS.get(market_type, market_type),
+            "release_count":  len(releases),
+            "mae":            mae,
+            "rmse":           rmse,
+            "fed_paper_mae":  FED_PAPER_MAE.get(market_type),
+            "releases":       list(reversed(releases)),  # newest first
+        }
+
+    return out
 
 
 # ── Formatting Helpers ────────────────────────────────────────────────────────
@@ -246,7 +348,8 @@ def get_market_data():
     {
       "generated_at": "...",
       "trend_days": 14,
-      "markets": { market_type: { ..., "annotations": [...] } }
+      "markets":  { market_type: { ..., "annotations": [...] } },
+      "accuracy": { market_type: { ..., "releases": [...] } }
     }
     """
     records = get_airtable_records()
@@ -257,10 +360,14 @@ def get_market_data():
     for market_type, market_data in markets.items():
         market_data["annotations"] = annotations.get(market_type, [])
 
+    accuracy_records = get_accuracy_records()
+    accuracy = process_accuracy(accuracy_records)
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "trend_days":   TREND_DAYS,
         "markets":      markets,
+        "accuracy":     accuracy,
     }
 
 
@@ -279,6 +386,7 @@ def get_formatted_report():
 
     market_order = ["FF_Rate", "CPI", "Core_CPI_MoM", "Payrolls", "GDP", "Recession"]
     markets = data["markets"]
+    accuracy = data.get("accuracy", {})
 
     for market_type in market_order:
         if market_type not in markets:
@@ -299,6 +407,17 @@ def get_formatted_report():
         if m.get("skewness") is not None:
             skew_dir = "right-skewed" if m["skewness"] > 0.1 else ("left-skewed" if m["skewness"] < -0.1 else "symmetric")
             lines.append(f"  SKEWNESS          {m['skewness']:.4f}  ({skew_dir})")
+
+        # Accuracy summary, if we have history
+        acc = accuracy.get(market_type)
+        if acc and acc.get("release_count"):
+            mae = acc.get("mae")
+            n = acc["release_count"]
+            mae_str = f"±{mae:.3f}" if mae is not None else "n/a"
+            fed = acc.get("fed_paper_mae")
+            fed_str = f"  (Fed paper: ±{fed:.3f})" if fed is not None else ""
+            lines.append(f"  ACCURACY          {mae_str} avg error · {n} release{'s' if n != 1 else ''}{fed_str}")
+
         annotations = m.get("annotations", [])
         if annotations:
             upcoming = [a for a in annotations if not a.get("is_past")]
