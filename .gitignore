@@ -8,3 +8,6 @@ data/
 CLAUDE OUTPUTS/
 .claude/
 ...
+db/
+archive/
+data/snapshot.json # also worth ignoring
