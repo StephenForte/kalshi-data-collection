@@ -693,9 +693,9 @@ def write_snapshot(push=True):
     the configured public GitHub repo. If push=False, only writes locally.
 
     Also refreshes the local HTML dashboard at data/kalshi_dashboard.html
-    by inlining the new snapshot. Build failures (e.g. template missing)
-    are logged but don't crash the caller — the snapshot has already been
-    safely written by that point.
+    by inlining the new snapshot into templates/kalshi_dashboard.html.
+    Build failures (e.g. template missing) are logged but don't crash the
+    caller — the snapshot has already been safely written by that point.
     """
     data = get_market_data()
     os.makedirs(os.path.dirname(SNAPSHOT_PATH), exist_ok=True)
@@ -710,7 +710,7 @@ def write_snapshot(push=True):
         build_dashboard.build(
             template_path=build_dashboard.DEFAULT_TEMPLATE,
             snapshot_path=SNAPSHOT_PATH,
-            output_path=build_dashboard.DEFAULT_TEMPLATE,
+            output_path=build_dashboard.DEFAULT_OUTPUT,
         )
     except Exception as e:
         import traceback

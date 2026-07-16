@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Macro Prediction Markets</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #102018;
+      --ink-soft: #24362c;
+      --muted: #5f7468;
+      --faint: #8aa094;
+      --line: rgba(16, 32, 24, 0.08);
+      --line-strong: rgba(16, 32, 24, 0.14);
+      --surface: rgba(255, 252, 247, 0.86);
+      --surface-solid: #fffaf3;
+      --surface-2: #f3efe6;
+      --bg-0: #e7f0ea;
+      --bg-1: #f7f3ea;
+      --bg-2: #dce8e1;
+      --accent: #0b7a63;
+      --accent-soft: rgba(11, 122, 99, 0.12);
+      --up: #1f8a4c;
+      --down: #c23b2a;
+      --warn: #b7791f;
+      --shadow: 0 18px 40px rgba(24, 42, 33, 0.08);
+      --radius: 18px;
+      --font: "Sora", "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", "SF Mono", "Cascadia Code", monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background:
+        radial-gradient(1200px 600px at 8% -10%, rgba(11, 122, 99, 0.18), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(183, 121, 31, 0.12), transparent 50%),
+        linear-gradient(180deg, var(--bg-0), var(--bg-1) 42%, var(--bg-2));
+      background-attachment: fixed;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.35;
+      background-image:
+        linear-gradient(rgba(16, 32, 24, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16, 32, 24, 0.03) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: radial-gradient(ellipse at center, black 30%, transparent 85%);
+    }
+
+    /* ── Header ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      padding: 18px 36px;
+      color: var(--surface-solid);
+      background: linear-gradient(135deg, rgba(16, 40, 30, 0.94), rgba(11, 70, 56, 0.92));
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 10px 30px rgba(10, 28, 20, 0.18);
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #3dcfab;
+      box-shadow: 0 0 0 0 rgba(61, 207, 171, 0.55);
+      animation: pulse 2.4s ease-out infinite;
+    }
+
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(61, 207, 171, 0.5); }
+      70%  { box-shadow: 0 0 0 12px rgba(61, 207, 171, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(61, 207, 171, 0); }
+    }
+
+    .brand h1 {
+      font-size: clamp(1.15rem, 2vw, 1.45rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+
+    .brand p {
+      font-size: 0.82rem;
+      color: rgba(236, 245, 239, 0.72);
+      max-width: 42rem;
+      line-height: 1.4;
+    }
+
+    .header-meta {
+      text-align: right;
+      flex-shrink: 0;
+      padding: 10px 14px;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .header-meta .meta-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(236, 245, 239, 0.5);
+    }
+
+    .header-meta .meta-value {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: rgba(246, 250, 247, 0.92);
+      margin-top: 4px;
+    }
+
+    .generated-fallback {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    /* ── Main ── */
+    main {
+      max-width: 1280px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 28px 24px 40px;
+      flex: 1;
+      position: relative;
+      z-index: 1;
+    }
+
+    .intro {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .intro h2 {
+      font-size: 0.78rem;
+      font-weight: 650;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .intro p {
+      margin-top: 6px;
+      font-size: 0.95rem;
+      color: var(--ink-soft);
+      max-width: 36rem;
+      line-height: 1.45;
+    }
+
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 22px;
+      align-items: start;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      backdrop-filter: blur(8px);
+      transition: transform 220ms ease, border-color 220ms ease, box-shadow 220ms ease;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(11, 122, 99, 0.28);
+      box-shadow: 0 22px 48px rgba(24, 42, 33, 0.12);
+    }
+
+    .card-reveal {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+
+    .card-reveal.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+      transition:
+        opacity 480ms cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms),
+        transform 480ms cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms),
+        border-color 220ms ease,
+        box-shadow 220ms ease;
+    }
+
+    .card-reveal.is-visible:hover {
+      transform: translateY(-3px);
+    }
+
+    .card-header {
+      padding: 20px 22px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.55), transparent);
+    }
+
+    .market-badge {
+      display: inline-block;
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 4px 9px;
+      border-radius: 7px;
+      margin-bottom: 10px;
+    }
+
+    .badge-cpi          { background: #dbeafe; color: #1d4ed8; }
+    .badge-core_cpi_mom { background: #d9f3ee; color: #0f766e; }
+    .badge-gdp          { background: #d1fae5; color: #065f46; }
+    .badge-recession    { background: #fee2e2; color: #991b1b; }
+    .badge-ff_rate      { background: #fef3c7; color: #92400e; }
+    .badge-payrolls     { background: #cffafe; color: #0e7490; }
+
+    .card-title {
+      font-size: 1.08rem;
+      font-weight: 700;
+      color: var(--ink);
+      letter-spacing: -0.02em;
+      line-height: 1.3;
+    }
+
+    .contract-series {
+      font-size: 0.72rem;
+      color: var(--faint);
+      margin-top: 5px;
+      font-family: var(--mono);
+    }
+
+    /* ── Stats row ── */
+    .card-stats {
+      display: flex;
+      gap: 0;
+      background: rgba(243, 239, 230, 0.65);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .stat {
+      flex: 1;
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat + .stat {
+      border-left: 1px solid var(--line-strong);
+    }
+
+    .stat-label {
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    .stat-value {
+      font-size: 1.7rem;
+      font-weight: 800;
+      color: var(--ink);
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-value.color-cpi          { color: #2563eb; }
+    .stat-value.color-core_cpi_mom { color: #0f766e; }
+    .stat-value.color-gdp          { color: #059669; }
+    .stat-value.color-recession    { color: #dc2626; }
+    .stat-value.color-ff_rate      { color: #d97706; }
+    .stat-value.color-payrolls     { color: #0891b2; }
+
+    .stat-sub {
+      font-size: 0.72rem;
+      color: var(--faint);
+      margin-top: 1px;
+    }
+
+    .stat-value-sm {
+      font-size: 1.12rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    /* ── Chart ── */
+    .card-chart {
+      padding: 18px 22px 22px;
+      flex: 1;
+    }
+
+    .chart-title {
+      font-size: 0.66rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--faint);
+      margin-bottom: 14px;
+    }
+
+    .bar-row { margin-bottom: 10px; }
+    .bar-row:last-child { margin-bottom: 0; }
+
+    .bar-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 4px;
+    }
+
+    .bar-label-text {
+      font-size: 0.74rem;
+      color: var(--ink-soft);
+      font-weight: 500;
+    }
+
+    .bar-pct-text {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-weight: 600;
+      font-family: var(--mono);
+    }
+
+    .bar-track {
+      height: 12px;
+      background: rgba(16, 32, 24, 0.06);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      min-width: 2px;
+      transition: width 700ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    /* ── Delta badge ── */
+    .delta-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+
+    .delta-age  { font-weight: 500; color: var(--faint); }
+    .delta-up   { color: var(--up); }
+    .delta-down { color: var(--down); }
+    .delta-flat { color: var(--faint); }
+
+    /* ── Sparkline section ── */
+    .card-sparkline {
+      padding: 12px 22px 4px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .sparkline-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+
+    .annot-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 14px;
+      padding: 2px 0 10px;
+    }
+
+    .annot-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.66rem;
+      color: var(--ink-soft);
+      white-space: nowrap;
+    }
+
+    .annot-item.annot-past { opacity: 0.45; }
+
+    .annot-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ── Trading volume strip ── */
+    .card-volume {
+      padding: 10px 22px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255,255,255,0.35);
+    }
+
+    .vol-label {
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    .vol-value {
+      font-size: 0.875rem;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+
+    .vol-low  { color: var(--down); }
+    .vol-mid  { color: var(--warn); }
+    .vol-high { color: var(--up); }
+
+    /* ── Forecast accuracy ── */
+    .card-accuracy {
+      padding: 14px 22px 18px;
+      border-top: 1px solid var(--line);
+      background: rgba(243, 239, 230, 0.35);
+    }
+
+    .accuracy-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .accuracy-mae {
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-weight: 600;
+      font-family: var(--mono);
+    }
+
+    .accuracy-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .accuracy-table thead th {
+      font-size: 0.63rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--faint);
+      padding-bottom: 6px;
+      text-align: right;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .accuracy-table thead th:first-child { text-align: left; }
+
+    .accuracy-table tbody td {
+      padding: 5px 0;
+      font-size: 0.74rem;
+      color: var(--ink-soft);
+      text-align: right;
+      border-bottom: 1px solid rgba(16,32,24,0.04);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .accuracy-table tbody tr:last-child td { border-bottom: none; }
+
+    .acc-date   { text-align: left !important; color: var(--muted); font-weight: 500; }
+    .acc-series { text-align: left !important; color: var(--faint); font-size: 0.65rem;
+                  font-family: var(--mono); }
+
+    .acc-err-pos  { color: #ef4444; font-weight: 700; }
+    .acc-err-neg  { color: #10b981; font-weight: 700; }
+    .acc-err-zero { color: var(--faint); }
+
+    .acc-benchmark {
+      font-size: 0.65rem;
+      color: var(--faint);
+      font-weight: 500;
+      margin-top: 8px;
+    }
+
+    /* ── Skeleton / empty ── */
+    .loading-state {
+      padding: 40px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .skeleton {
+      background: linear-gradient(90deg, #ece7dc 25%, #f7f3ea 50%, #ece7dc 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+      border-radius: 8px;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    .empty-state {
+      grid-column: 1 / -1;
+      padding: 36px 28px;
+      border-radius: var(--radius);
+      border: 1px dashed var(--line-strong);
+      background: rgba(255,250,243,0.7);
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+
+    .empty-state strong { color: var(--down); font-size: 0.95rem; }
+    .empty-hint { font-size: 0.78rem; color: var(--faint); }
+    .empty-state code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      background: rgba(16,32,24,0.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      padding: 22px 24px;
+      font-size: 0.74rem;
+      color: var(--muted);
+      line-height: 1.65;
+      border-top: 1px solid var(--line);
+      background: rgba(255, 250, 243, 0.72);
+      backdrop-filter: blur(8px);
+      position: relative;
+      z-index: 1;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Responsive ── */
+    @media (max-width: 720px) {
+      header {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 16px 18px;
+      }
+
+      .header-meta {
+        text-align: left;
+        width: 100%;
+      }
+
+      main { padding: 20px 14px 28px; }
+
+      .intro { flex-direction: column; align-items: flex-start; }
+
+      .cards-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+      .brand-dot { animation: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <h1>Macro Prediction Markets</h1>
+    </div>
+    <p>Kalshi-implied probabilities for CPI, growth, payrolls, recession, and the Fed path.</p>
+  </div>
+  <div class="header-meta">
+    <div class="meta-label">Data as of</div>
+    <div class="meta-value" id="last-updated">—</div>
+  </div>
+  <span class="generated-fallback">Generated: 1970-01-01 00:00 UTC</span>
+</header>
+
+<main>
+  <div class="intro">
+    <div>
+      <h2>Market snapshot</h2>
+      <p>Live consensus from active Kalshi macro contracts — means, distributions, and recent accuracy.</p>
+    </div>
+  </div>
+  <div class="cards-grid" id="cards-grid">
+    <!-- Cards rendered by JS -->
+  </div>
+</main>
+
+<footer>
+  Data sourced from <a href="https://kalshi.com" target="_blank" rel="noopener">Kalshi</a> prediction markets, collected multiple times daily.
+  Methodology based on Diercks, Katz &amp; Wright (2026), Federal Reserve Working Paper.
+</footer>
+
+<script>
+// build_dashboard.py replaces this literal; Pages/local fetch uses snapshot.json when empty.
+const data = {};
+const EMBEDDED_DATA = data;
+
+  /* ────────────────────────────────────────────
+     Style config — visual identity per market
+  ──────────────────────────────────────────── */
+  const STYLE = {
+    CPI: {
+      name: 'CPI Year-over-Year', eventLabel: 'CPI Release',
+      unit: '%', badge: 'badge-cpi', colorClass: 'color-cpi', barColor: '#2563eb',
+    },
+    Core_CPI_MoM: {
+      name: 'Core CPI Month-over-Month', eventLabel: 'CPI Release',
+      unit: '%', badge: 'badge-core_cpi_mom', colorClass: 'color-core_cpi_mom', barColor: '#0f766e',
+    },
+    GDP: {
+      name: 'GDP Growth', eventLabel: 'GDP Release',
+      unit: '%', badge: 'badge-gdp', colorClass: 'color-gdp', barColor: '#059669',
+    },
+    Recession: {
+      name: 'Recession Probability', eventLabel: 'NBER Declaration',
+      unit: '%', badge: 'badge-recession', colorClass: 'color-recession', barColor: '#dc2626',
+    },
+    FF_Rate: {
+      name: 'Fed Funds Rate', eventLabel: 'FOMC Meeting',
+      unit: '%', badge: 'badge-ff_rate', colorClass: 'color-ff_rate', barColor: '#d97706',
+    },
+    Payrolls: {
+      name: 'Non-Farm Payrolls', eventLabel: 'NFP Release',
+      unit: 'jobs', badge: 'badge-payrolls', colorClass: 'color-payrolls', barColor: '#0891b2',
+    },
+  };
+
+  // Determines card order on the page
+  const MARKET_ORDER = ['CPI', 'Core_CPI_MoM', 'GDP', 'Payrolls', 'Recession', 'FF_Rate'];
+
+  // Annotation dot colors — must match market badge colors
+  const ANNOT_COLORS = {
+    cpi:       '#2563eb',
+    fomc:      '#d97706',
+    gdp:       '#059669',
+    payrolls:  '#0891b2',
+    recession: '#dc2626',
+  };
+
+  /* ────────────────────────────────────────────
+     Formatters
+  ──────────────────────────────────────────── */
+
+  /**
+   * Format implied_mean for display.
+   * isProbability=true  → value is 0–1 decimal (e.g. 0.96 → "96.0%")
+   * unit='%'           → value already in percent units (e.g. 4.25 → "4.25%")
+   * unit='jobs'        → integer with sign and "jobs" suffix
+   */
+  function formatMean(value, isProbability, unit) {
+    if (value === undefined || value === null) return '—';
+    if (isProbability) return `${(value * 100).toFixed(1)}%`;
+    if (unit === '%')    return `${value.toFixed(2)}%`;
+    if (unit === 'jobs') {
+      const sign = value > 0 ? '+' : '';
+      const num  = Math.round(value).toLocaleString('en-US');
+      // "jobs" rendered smaller so the stat box doesn't wrap at 1.65rem
+      return `${sign}${num}<span style="font-size:0.48em;font-weight:700;margin-left:5px;vertical-align:middle;letter-spacing:0;opacity:0.85">jobs</span>`;
+    }
+    return value.toFixed(2);
+  }
+
+  /** Format market_volume_usd with color class. */
+  function formatVolume(v) {
+    if (v == null) return null;
+    const n = Number(v);
+    if (isNaN(n)) return null;
+    const formatted = '$' + Math.round(n).toLocaleString('en-US');
+    const cls = n < 10000 ? 'vol-low' : n < 25000 ? 'vol-mid' : 'vol-high';
+    return { formatted, cls };
+  }
+
+  /** Format std_dev as ±value with inline units. */
+  function formatStdDev(value, unit) {
+    if (value == null) return null;
+    const n = Number(value);
+    if (isNaN(n)) return null;
+    if (unit === 'jobs') return `±${Math.round(n).toLocaleString('en-US')} jobs`;
+    if (unit === '%')    return `±${n.toFixed(2)}%`;
+    return `±${n.toFixed(2)}`;
+  }
+
+  /** Format skewness as a signed number. */
+  function formatSkewness(value) {
+    if (value == null) return null;
+    const n = Number(value);
+    if (isNaN(n)) return null;
+    return `${n > 0 ? '+' : ''}${n.toFixed(2)}`;
+  }
+
+  /** Format an ISO timestamp into a readable local string. */
+  function formatTimestamp(ts) {
+    if (!ts) return '—';
+    try {
+      return new Date(ts).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+      });
+    } catch { return ts; }
+  }
+
+  /* ────────────────────────────────────────────
+     FOMC meeting label
+  ──────────────────────────────────────────── */
+
+  /**
+   * Parse contract_series into a human-readable FOMC meeting label.
+   * New format: "KXFEDDECISION-26JUN" (year then month at the end).
+   */
+  function parseFOMCMeeting(series) {
+    if (!series) return 'FOMC Meeting';
+    const MONTHS = {
+      JAN: 'January', FEB: 'February', MAR: 'March',    APR: 'April',
+      MAY: 'May',     JUN: 'June',     JUL: 'July',     AUG: 'August',
+      SEP: 'September', OCT: 'October', NOV: 'November', DEC: 'December',
+    };
+    // Match trailing -26JUN / -26SEP etc.
+    const m = series.match(/[-_](\d{2})([A-Z]{3})$/i);
+    if (m) {
+      const yr  = `20${m[1]}`;
+      const mon = MONTHS[m[2].toUpperCase()] || m[2];
+      return `${mon} ${yr} FOMC`;
+    }
+    return series;
+  }
+
+  /* ────────────────────────────────────────────
+     Delta badge
+  ──────────────────────────────────────────── */
+
+  /** Compare the last two trend readings and render a change badge. */
+  function buildDeltaHtml(trend, isProbability, unit) {
+    if (!trend || trend.length < 2) {
+      return '<span class="stat-sub">Market consensus</span>';
+    }
+    const n      = trend.length;
+    const curr   = trend[n - 1].implied_mean;
+    const prev   = trend[n - 2].implied_mean;
+    const currTs = trend[n - 1].timestamp;
+    const prevTs = trend[n - 2].timestamp;
+    if (curr == null || prev == null) {
+      return '<span class="stat-sub">Market consensus</span>';
+    }
+
+    const delta    = curr - prev;
+    const diffH    = Math.round((new Date(currTs) - new Date(prevTs)) / 3_600_000);
+    const ageLabel = diffH < 24 ? `${diffH}h ago` : `${Math.round(diffH / 24)}d ago`;
+    const isFlat   = unit === 'jobs'
+      ? Math.abs(delta) < 5
+      : Math.abs(delta) < 0.005;
+
+    if (isFlat) {
+      return `<span class="delta-badge delta-flat">→ Unchanged <span class="delta-age">vs ${ageLabel}</span></span>`;
+    }
+
+    const arrow = delta > 0 ? '▲' : '▼';
+    const cls   = delta > 0 ? 'delta-up' : 'delta-down';
+    const sign  = delta > 0 ? '+' : '';
+    const fmt   = isProbability
+      ? `${sign}${(delta * 100).toFixed(1)}pp`
+      : unit === 'jobs'
+        ? `${sign}${Math.round(delta).toLocaleString('en-US')}`
+        : `${sign}${delta.toFixed(2)}%`;
+
+    return `<span class="delta-badge ${cls}">${arrow} ${fmt} <span class="delta-age">vs ${ageLabel}</span></span>`;
+  }
+
+  /* ────────────────────────────────────────────
+     Sparkline SVG
+  ──────────────────────────────────────────── */
+
+  /**
+   * Build a self-contained area sparkline from a trend array.
+   * Index-based x-positioning fills the full width regardless of timestamp gaps.
+   *
+   * @param {Array}  trend        - [{timestamp, implied_mean}, ...]
+   * @param {Object} style        - STYLE entry for this market
+   * @param {string} gradKey      - unique string for the SVG gradient ID
+   * @param {boolean} isProbability - true → y-axis ticks shown as percentages
+   */
+  function buildSparklineHtml(trend, style, gradKey, isProbability) {
+    if (!trend || trend.length < 2) return '';
+
+    const values     = trend.map(r => r.implied_mean);
+    const timestamps = trend.map(r => new Date(r.timestamp).getTime());
+    const n          = values.length;
+
+    // Canvas dimensions with padding for axes
+    const W = 500, H = 130;
+    const pL = 44, pR = 8, pT = 10, pB = 22;
+    const cW = W - pL - pR, cH = H - pT - pB;
+
+    // Index-based x (data always fills full width)
+    const toX = i => pL + (n > 1 ? (i / (n - 1)) * cW : cW / 2);
+
+    // Y domain with 15% breathing room
+    const minV   = Math.min(...values), maxV = Math.max(...values);
+    const vRange = maxV - minV || Math.abs(minV) * 0.1 || 0.01;
+    const yPad   = vRange * 0.15;
+    const yMin   = minV - yPad, yMax = maxV + yPad;
+    const toY    = v => pT + (1 - (v - yMin) / (yMax - yMin)) * cH;
+
+    // Nice tick generator
+    function niceTicks(lo, hi, count = 4) {
+      const range = hi - lo;
+      const raw   = range / count;
+      const mag   = Math.pow(10, Math.floor(Math.log10(raw)));
+      const step  = [1, 2, 2.5, 5, 10].find(f => f * mag >= raw) * mag;
+      const start = Math.ceil(lo / step) * step;
+      const ticks = [];
+      for (let t = start; t <= hi + step * 0.01; t = +(t + step).toFixed(10)) {
+        if (t >= lo) ticks.push(t);
+        if (ticks.length >= count + 2) break;
+      }
+      return ticks;
+    }
+    const ticks = niceTicks(yMin, yMax);
+
+    // Y-axis tick formatter
+    const fmtTick = v => {
+      if (isProbability) return `${(v * 100).toFixed(0)}%`;
+      if (style.unit === '%')    return `${v.toFixed(vRange < 0.5 ? 2 : vRange < 5 ? 1 : 0)}%`;
+      if (style.unit === 'jobs') return `${Math.round(v / 1000)}K`;
+      return v.toFixed(2);
+    };
+
+    // Grid lines + y-axis labels
+    const gridSvg = ticks.map(t => {
+      const y = toY(t).toFixed(1);
+      return `<line x1="${pL}" y1="${y}" x2="${W - pR}" y2="${y}" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="${pL - 5}" y="${y}" text-anchor="end" dominant-baseline="middle"
+        font-size="9" fill="#cbd5e1" font-family="system-ui,sans-serif">${fmtTick(t)}</text>`;
+    }).join('');
+
+    // X-axis labels: first date, reading count, last date
+    const fmtDate = ts => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const midI    = Math.round((n - 1) / 2);
+    const xLbls   = [
+      { i: 0,     text: fmtDate(timestamps[0]),     anchor: 'start'  },
+      { i: midI,  text: `${n} readings`,             anchor: 'middle' },
+      { i: n - 1, text: fmtDate(timestamps[n - 1]), anchor: 'end'    },
+    ].map(({ i, text, anchor }) => {
+      const x = Math.min(Math.max(toX(i), pL), W - pR);
+      return `<text x="${x.toFixed(1)}" y="${H - 5}" text-anchor="${anchor}"
+        font-size="9" fill="#cbd5e1" font-family="system-ui,sans-serif">${text}</text>`;
+    }).join('');
+
+    // Area path + line + dots
+    const pts      = values.map((v, i) => ({ x: toX(i), y: toY(v) }));
+    const linePts  = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const areaPath = [
+      `M ${pts[0].x.toFixed(1)},${pT + cH}`,
+      `L ${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`,
+      pts.slice(1).map(p => `L ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '),
+      `L ${pts[n - 1].x.toFixed(1)},${pT + cH} Z`,
+    ].join(' ');
+
+    const color = style.barColor;
+    const gId   = `sg-${gradKey}`.replace(/[^a-z0-9-]/gi, '-');
+    const dots  = pts.map((p, i) => {
+      const last = i === n - 1;
+      return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}"
+        r="${last ? 3 : 1.5}" fill="${color}" opacity="${last ? 1 : 0.4}"/>`;
+    }).join('');
+
+    return `<svg width="100%" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="${gId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="${color}" stop-opacity="0.18"/>
+          <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      ${gridSvg}
+      <path d="${areaPath}" fill="url(#${gId})"/>
+      <polyline points="${linePts}" fill="none" stroke="${color}"
+                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      ${dots}
+      ${xLbls}
+    </svg>`;
+  }
+
+  /* ────────────────────────────────────────────
+     Annotation legend
+  ──────────────────────────────────────────── */
+
+  /** Render a dot-legend of event annotations below the sparkline. */
+  function buildAnnotationLegendHtml(annotations) {
+    if (!annotations || !annotations.length) return '';
+    const fmt = d => {
+      const dt = new Date(d + 'T12:00:00Z');
+      return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+    // Upcoming events first, then past; within group sort by date ascending
+    const sorted = [...annotations].sort((a, b) => {
+      if (!!a.is_past !== !!b.is_past) return a.is_past ? 1 : -1;
+      return a.event_date.localeCompare(b.event_date);
+    });
+    return `<div class="annot-legend">${sorted.map(a => {
+      const color = ANNOT_COLORS[(a.type || '').toLowerCase()] || '#94a3b8';
+      const cls   = a.is_past ? 'annot-item annot-past' : 'annot-item';
+      return `<span class="${cls}">` +
+        `<span class="annot-dot" style="background:${color};"></span>` +
+        `${a.label} — ${fmt(a.event_date)}</span>`;
+    }).join('')}</div>`;
+  }
+
+  /* ────────────────────────────────────────────
+     Bar chart
+  ──────────────────────────────────────────── */
+
+  /**
+   * Render up to the top-3 pre-formatted distribution bars.
+   * Labels and probabilities come directly from the JSON distribution array.
+   */
+  function renderBarsHtml(distribution, barColor) {
+    if (!distribution || !distribution.length) {
+      return '<p style="color:#94a3b8;font-size:0.8rem;">No distribution data available.</p>';
+    }
+    const maxProb = Math.max(...distribution.map(d => d.probability), 0.001);
+    return distribution.map(bar => {
+      const widthPct   = ((bar.probability / maxProb) * 100).toFixed(1);
+      const displayPct = (bar.probability * 100).toFixed(1);
+      return `
+        <div class="bar-row">
+          <div class="bar-meta">
+            <span class="bar-label-text">${bar.label}</span>
+            <span class="bar-pct-text">${displayPct}%</span>
+          </div>
+          <div class="bar-track">
+            <div class="bar-fill" style="width:${widthPct}%;background:${barColor};"></div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  /* ────────────────────────────────────────────
+     Forecast accuracy
+  ──────────────────────────────────────────── */
+
+  /**
+   * Render the historical accuracy section from data.accuracy[key].
+   * accData shape: { label, mae, rmse, fed_paper_mae, release_count, releases: [...] }
+   */
+  function buildAccuracyHtml(accData, style) {
+    if (!accData || !accData.releases || !accData.releases.length) return '';
+
+    const releases = [...accData.releases]
+      .sort((a, b) => b.release_date.localeCompare(a.release_date))
+      .slice(0, 5);
+
+    // Value formatter matching market unit
+    const fmtVal = v => {
+      const n = Number(v);
+      if (v == null || isNaN(n)) return '—';
+      if (style.unit === '%')    return `${n.toFixed(2)}%`;
+      if (style.unit === 'jobs') return `${Math.round(n).toLocaleString('en-US')}`;
+      return n.toFixed(2);
+    };
+
+    // Signed error formatter
+    const fmtErr = v => {
+      const n = Number(v);
+      if (v == null || isNaN(n)) return '—';
+      const sign = n > 0 ? '+' : '';
+      if (style.unit === '%')    return `${sign}${n.toFixed(2)}%`;
+      if (style.unit === 'jobs') return `${sign}${Math.round(n).toLocaleString('en-US')}`;
+      return `${sign}${n.toFixed(2)}`;
+    };
+
+    // MAE/benchmark formatter
+    const fmtMae = v => {
+      if (v == null) return null;
+      const n = Number(v);
+      if (isNaN(n)) return null;
+      if (style.unit === '%')    return `±${n.toFixed(2)}%`;
+      if (style.unit === 'jobs') return `±${Math.round(n).toLocaleString('en-US')}`;
+      return `±${n.toFixed(2)}`;
+    };
+
+    const fmtDate = d => {
+      try {
+        return new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: '2-digit',
+        });
+      } catch { return d; }
+    };
+
+    const maeStr   = fmtMae(accData.mae);
+    const countStr = `${accData.release_count} release${accData.release_count !== 1 ? 's' : ''}`;
+    const summaryText = [maeStr, countStr].filter(Boolean).join(' · ');
+
+    // Fed paper benchmark row (if available)
+    const fedBenchmark = accData.fed_paper_mae != null
+      ? `<div class="acc-benchmark">Fed Working Paper benchmark: ${fmtMae(accData.fed_paper_mae)} MAE</div>`
+      : '';
+
+    const rows = releases.map(r => {
+      const err    = Number(r.error);
+      const errCls = isNaN(err) || Math.abs(err) < 0.001 ? 'acc-err-zero'
+                   : err > 0 ? 'acc-err-pos' : 'acc-err-neg';
+      return `
+        <tr>
+          <td class="acc-date">${fmtDate(r.release_date)}</td>
+          <td>${fmtVal(r.kalshi_implied_mean)}</td>
+          <td>${fmtVal(r.actual_value)}</td>
+          <td class="${errCls}">${fmtErr(r.error)}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+      <div class="card-accuracy">
+        <div class="accuracy-header">
+          <span class="chart-title">Forecast accuracy</span>
+          <span class="accuracy-mae">${summaryText}</span>
+        </div>
+        <table class="accuracy-table">
+          <thead>
+            <tr>
+              <th>Release</th>
+              <th>Kalshi</th>
+              <th>Actual</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${fedBenchmark}
+      </div>`;
+  }
+
+  /* ────────────────────────────────────────────
+     Card renderer
+  ──────────────────────────────────────────── */
+
+  /**
+   * Render a single market card.
+   *
+   * @param {string} key      - market key, e.g. 'CPI', 'FF_Rate'
+   * @param {Object} market   - top-level market object from snapshot.json
+   * @param {Object|null} meeting - for FF_Rate, the per-meeting object; null otherwise
+   */
+  function renderCard(key, market, meeting, accData) {
+    const style      = STYLE[key];
+    const isMeeting  = !!meeting;
+    const src        = isMeeting ? meeting : market;       // data source for this card
+
+    const contractSeries = src.contract_series || '—';
+    const impliedMean    = src.implied_mean;
+    const daysToEvent    = src.days_to_event;
+    const distribution   = src.distribution || [];
+    const trend          = src.trend || [];
+    const isProbability  = market.is_probability || false;
+    const annotations    = market.annotations || [];
+
+    // Event label below days-to-event stat
+    const eventLabel = isMeeting
+      ? parseFOMCMeeting(contractSeries)
+      : style.eventLabel;
+
+    // Stat label: for probability markets, show "P(<most likely outcome>)"
+    const meanLabel = (isProbability && distribution.length > 0)
+      ? `P(${distribution[0].label})`
+      : 'Implied Mean';
+
+    // Formatted stats
+    const meanFmt   = formatMean(impliedMean, isProbability, style.unit);
+    const vol       = formatVolume(src.market_volume_usd);
+    const stdDevFmt = formatStdDev(src.std_dev, style.unit);
+    const skewFmt   = formatSkewness(src.skewness);
+    const gradKey   = `${key}-${contractSeries.replace(/[^a-z0-9]/gi, '')}`;
+
+    // Sub-sections
+    const deltaHtml = buildDeltaHtml(trend, isProbability, style.unit);
+    const sparkHtml = buildSparklineHtml(trend, style, gradKey, isProbability);
+    const annotHtml = buildAnnotationLegendHtml(annotations);
+    const barsHtml    = renderBarsHtml(distribution, style.barColor);
+    const accuracyHtml = buildAccuracyHtml(accData, style);
+    const badgeLabel = key.replace(/_/g, ' ');
+
+    const volumeSection = vol ? `
+        <div class="card-volume">
+          <span class="vol-label">Trading Volume</span>
+          <span class="vol-value ${vol.cls}">${vol.formatted}</span>
+        </div>` : '';
+
+    const distStatsSection = (stdDevFmt || skewFmt) ? `
+        <div class="card-stats" style="border-top:none;">
+          ${stdDevFmt ? `
+          <div class="stat">
+            <span class="stat-label">Uncertainty</span>
+            <span class="stat-value stat-value-sm">${stdDevFmt}</span>
+          </div>` : ''}
+          ${skewFmt ? `
+          <div class="stat">
+            <span class="stat-label">Skew</span>
+            <span class="stat-value stat-value-sm">${skewFmt}</span>
+          </div>` : ''}
+        </div>` : '';
+
+    const sparklineSection = trend.length >= 2 ? `
+        <div class="card-sparkline">
+          <div class="sparkline-header">
+            <span class="chart-title">Implied mean trend</span>
+          </div>
+          ${sparkHtml}
+          ${annotHtml}
+        </div>` : '';
+
+    return `
+      <div class="card card-reveal">
+        <div class="card-header">
+          <span class="market-badge ${style.badge}">${badgeLabel}</span>
+          <div class="card-title">${style.name}</div>
+          <div class="contract-series">${contractSeries}</div>
+        </div>
+
+        <div class="card-stats">
+          <div class="stat">
+            <span class="stat-label">${meanLabel}</span>
+            <span class="stat-value ${style.colorClass}">${meanFmt}</span>
+            ${deltaHtml}
+          </div>
+          <div class="stat">
+            <span class="stat-label">Days to Event</span>
+            <span class="stat-value">${daysToEvent ?? '—'}</span>
+            <span class="stat-sub">${eventLabel}</span>
+          </div>
+        </div>
+
+        ${distStatsSection}
+        ${volumeSection}
+        ${sparklineSection}
+
+        <div class="card-chart">
+          <div class="chart-title">Probability distribution</div>
+          ${barsHtml}
+        </div>
+
+        ${accuracyHtml}
+      </div>`;
+  }
+
+  /* ────────────────────────────────────────────
+     Loading placeholder
+  ──────────────────────────────────────────── */
+
+  function renderLoadingCard(key) {
+    const style = STYLE[key];
+    if (!style) return '';
+    return `
+      <div class="card card-reveal">
+        <div class="card-header">
+          <span class="market-badge ${style.badge}">${key.replace(/_/g, ' ')}</span>
+          <div class="card-title">${style.name}</div>
+        </div>
+        <div class="loading-state">
+          <div class="skeleton" style="height:14px;width:40%;"></div>
+          <div class="skeleton" style="height:36px;width:60%;"></div>
+          <div class="skeleton" style="height:14px;width:30%;margin-top:8px;"></div>
+          <div class="skeleton" style="height:18px;width:100%;"></div>
+          <div class="skeleton" style="height:18px;width:85%;"></div>
+          <div class="skeleton" style="height:18px;width:70%;"></div>
+        </div>
+      </div>`;
+  }
+
+  /* ────────────────────────────────────────────
+     Main init — fetch JSON, render cards
+  ──────────────────────────────────────────── */
+
+  async function init() {
+    const grid = document.getElementById('cards-grid');
+
+    // Show loading skeletons while resolving data
+    grid.innerHTML = MARKET_ORDER.map(k => renderLoadingCard(k)).join('');
+
+    let data = (typeof EMBEDDED_DATA !== 'undefined' && EMBEDDED_DATA && EMBEDDED_DATA.markets
+      && Object.keys(EMBEDDED_DATA.markets).length)
+      ? EMBEDDED_DATA
+      : null;
+
+    if (!data) {
+      try {
+        const res = await fetch('./data/snapshot.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        data = await res.json();
+      } catch (err) {
+        console.error('Snapshot fetch failed:', err);
+        grid.innerHTML = `
+          <div class="empty-state">
+            <strong>Failed to load market data</strong>
+            <span>${err.message}</span>
+            <span class="empty-hint">Make sure <code>data/snapshot.json</code> is available.</span>
+          </div>`;
+        return;
+      }
+    }
+
+    // Prefer snapshot timestamp; fall back to build-injected Generated label
+    const updatedEl = document.getElementById('last-updated');
+    if (data.generated_at) {
+      updatedEl.textContent = formatTimestamp(data.generated_at);
+    }
+
+    const accuracy = data.accuracy || {};
+    const cards = [];
+    for (const key of MARKET_ORDER) {
+      const market  = data.markets && data.markets[key];
+      if (!market) continue;
+
+      const accData = accuracy[key] || null;
+
+      if (key === 'FF_Rate' && Array.isArray(market.meetings)) {
+        for (const meeting of market.meetings) {
+          try {
+            const meetingAcc = meeting === market.meetings[0] ? accData : null;
+            cards.push(renderCard(key, market, meeting, meetingAcc));
+          } catch (err) {
+            console.error(`Error rendering FF_Rate meeting ${meeting.contract_series}:`, err);
+          }
+        }
+      } else {
+        try {
+          cards.push(renderCard(key, market, null, accData));
+        } catch (err) {
+          console.error(`Error rendering ${key}:`, err);
+        }
+      }
+    }
+
+    if (!cards.length) {
+      grid.innerHTML = '<div class="empty-state">No markets found in snapshot.</div>';
+      return;
+    }
+
+    grid.innerHTML = cards.join('');
+    // Stagger entrance for a calmer first paint
+    grid.querySelectorAll('.card-reveal').forEach((card, i) => {
+      card.style.setProperty('--reveal-delay', `${Math.min(i * 55, 440)}ms`);
+      requestAnimationFrame(() => card.classList.add('is-visible'));
+    });
+    // Kick bar animations after layout
+    requestAnimationFrame(() => {
+      grid.querySelectorAll('.bar-fill').forEach(el => {
+        const w = el.style.width;
+        el.style.width = '0%';
+        requestAnimationFrame(() => { el.style.width = w; });
+      });
+    });
+  }
+
+  init();
+
+</script>
+</body>
+</html>
