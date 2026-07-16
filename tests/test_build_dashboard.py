@@ -334,3 +334,60 @@ const data = {"test": true};
         assert result == 0
         captured = capsys.readouterr()
         assert "WARNING" in captured.err or "timestamp not found" in captured.err
+
+
+class TestDashboardTemplateInit:
+    """Static checks on templates/kalshi_dashboard.html init behavior."""
+
+    @pytest.fixture
+    def template_html(self):
+        path = build_dashboard.DEFAULT_TEMPLATE
+        assert os.path.exists(path), f"missing template: {path}"
+        with open(path) as f:
+            return f.read()
+
+    def test_fetch_tries_root_and_data_sibling_paths(self, template_html):
+        """Empty embed must try both Pages-root and data/-sibling snapshot URLs."""
+        assert "async function fetchSnapshot()" in template_html
+        # Order: repo-root / Pages first, then sibling of data/kalshi_dashboard.html
+        root_idx = template_html.find("'./data/snapshot.json'")
+        sibling_idx = template_html.find("'./snapshot.json'")
+        assert root_idx != -1, "missing Pages/root snapshot path"
+        assert sibling_idx != -1, "missing data/-sibling snapshot path"
+        assert root_idx < sibling_idx
+        # Must not hard-code a single fetch URL anymore
+        assert "fetch('./data/snapshot.json'" not in template_html
+
+    def test_last_updated_falls_back_to_generated_label(self, template_html):
+        """#last-updated must use .generated-fallback when generated_at is absent."""
+        assert "function resolveUpdatedLabel(" in template_html
+        assert "querySelector('.generated-fallback')" in template_html
+        assert "resolveUpdatedLabel(data)" in template_html
+        assert 'id="last-updated"' in template_html
+        assert 'class="generated-fallback"' in template_html
+
+    def test_build_writes_generated_fallback_from_snapshot(
+        self, temp_snapshot_file, tmp_path
+    ):
+        """build_dashboard must refresh the hidden Generated label the UI can read."""
+        template_src = build_dashboard.DEFAULT_TEMPLATE
+        output_path = str(tmp_path / "kalshi_dashboard.html")
+        result = build_dashboard.build(
+            template_path=template_src,
+            snapshot_path=temp_snapshot_file,
+            output_path=output_path,
+        )
+        assert result == 0
+
+        with open(temp_snapshot_file) as f:
+            snap = json.load(f)
+        gen_dt = datetime.fromisoformat(
+            snap["generated_at"].replace("Z", "+00:00")
+        ).astimezone(timezone.utc)
+        expected = gen_dt.strftime("Generated: %Y-%m-%d %H:%M UTC")
+
+        with open(output_path) as f:
+            content = f.read()
+        assert expected in content
+        assert "resolveUpdatedLabel(data)" in content
+        assert "'./snapshot.json'" in content
