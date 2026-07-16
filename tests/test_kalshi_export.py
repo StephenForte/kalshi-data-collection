@@ -5,6 +5,7 @@ Tests for kalshi_export.py
 import json
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
@@ -430,9 +431,19 @@ class TestWriteSnapshot:
         """Should write snapshot.json to disk."""
         original_db_path = kalshi_export.DB_PATH
         original_snapshot_path = kalshi_export.SNAPSHOT_PATH
+        original_build_dashboard = sys.modules.get("build_dashboard")
+        snapshot_path = str(tmp_path / "data" / "snapshot.json")
         kalshi_export.DB_PATH = initialized_db
-        kalshi_export.SNAPSHOT_PATH = str(tmp_path / "data" / "snapshot.json")
-        
+        kalshi_export.SNAPSHOT_PATH = snapshot_path
+
+        # write_snapshot imports build_dashboard lazily; stub it in sys.modules
+        # so we don't need importlib.reload (which would re-bind DB_PATH from
+        # KALSHI_DB_PATH while the fixture still points at a temp path).
+        mock_build_dashboard = MagicMock()
+        mock_build_dashboard.build = MagicMock()
+        mock_build_dashboard.DEFAULT_TEMPLATE = str(tmp_path / "template.html")
+        sys.modules["build_dashboard"] = mock_build_dashboard
+
         try:
             # Insert minimal test data
             conn = sqlite3.connect(initialized_db)
@@ -447,32 +458,19 @@ class TestWriteSnapshot:
             """)
             conn.commit()
             conn.close()
-            
-            # Mock the build_dashboard module to avoid missing template
-            import sys
-            mock_build_dashboard = MagicMock()
-            mock_build_dashboard.build = MagicMock()
-            mock_build_dashboard.DEFAULT_TEMPLATE = str(tmp_path / "template.html")
-            sys.modules['build_dashboard'] = mock_build_dashboard
-            
-            # Reload kalshi_export to pick up the mock
-            import importlib
-            importlib.reload(kalshi_export)
-            kalshi_export.DB_PATH = initialized_db
-            kalshi_export.SNAPSHOT_PATH = str(tmp_path / "data" / "snapshot.json")
-            
+
             data = kalshi_export.write_snapshot(push=False)
-            
-            assert os.path.exists(kalshi_export.SNAPSHOT_PATH)
+
+            assert os.path.exists(snapshot_path)
             assert "generated_at" in data
             assert "markets" in data
         finally:
             kalshi_export.DB_PATH = original_db_path
             kalshi_export.SNAPSHOT_PATH = original_snapshot_path
-            # Restore the real module
-            if 'build_dashboard' in sys.modules:
-                del sys.modules['build_dashboard']
-            importlib.reload(kalshi_export)
+            if original_build_dashboard is None:
+                sys.modules.pop("build_dashboard", None)
+            else:
+                sys.modules["build_dashboard"] = original_build_dashboard
 
 
 class TestPushToGithub:

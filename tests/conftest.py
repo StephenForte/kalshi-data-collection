@@ -9,12 +9,21 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
+# kalshi_monitor / kalshi_accuracy read these at import time. conftest loads
+# before test modules, so setdefaults here; a per-test fixture is too late.
+os.environ.setdefault("KALSHI_API_KEY", "test-api-key")
+os.environ.setdefault("FRED_API_KEY", "test-fred-key")
+
 
 @pytest.fixture
 def mock_env_vars(monkeypatch):
-    """Set up mock environment variables for testing."""
+    """Ensure API key env vars and matching module constants for a test."""
     monkeypatch.setenv("KALSHI_API_KEY", "test-api-key")
     monkeypatch.setenv("FRED_API_KEY", "test-fred-key")
+    # Modules bind these at import; update constants so tests don't depend on
+    # whatever was in the process environment during collection.
+    monkeypatch.setattr("kalshi_monitor.KALSHI_API_KEY", "test-api-key", raising=False)
+    monkeypatch.setattr("kalshi_accuracy.FRED_API_KEY", "test-fred-key", raising=False)
 
 
 @pytest.fixture
