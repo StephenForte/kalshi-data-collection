@@ -1237,6 +1237,37 @@ const EMBEDDED_DATA = data;
      Main init — fetch JSON, render cards
   ──────────────────────────────────────────── */
 
+  /**
+   * Load snapshot.json relative to the page.
+   * Repo-root / Pages: ./data/snapshot.json
+   * Built dashboard in data/: ./snapshot.json
+   */
+  async function fetchSnapshot() {
+    const candidates = ['./data/snapshot.json', './snapshot.json'];
+    let lastErr;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        return await res.json();
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('snapshot.json not found');
+  }
+
+  /** Prefer data.generated_at; else parse build-injected .generated-fallback. */
+  function resolveUpdatedLabel(data) {
+    if (data && data.generated_at) return formatTimestamp(data.generated_at);
+    const fallback = document.querySelector('.generated-fallback');
+    const m = fallback && fallback.textContent.match(
+      /Generated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*UTC/
+    );
+    if (m) return formatTimestamp(m[1].replace(' ', 'T') + 'Z');
+    return null;
+  }
+
   async function init() {
     const grid = document.getElementById('cards-grid');
 
@@ -1250,9 +1281,7 @@ const EMBEDDED_DATA = data;
 
     if (!data) {
       try {
-        const res = await fetch('./data/snapshot.json', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-        data = await res.json();
+        data = await fetchSnapshot();
       } catch (err) {
         console.error('Snapshot fetch failed:', err);
         grid.innerHTML = `
@@ -1267,9 +1296,8 @@ const EMBEDDED_DATA = data;
 
     // Prefer snapshot timestamp; fall back to build-injected Generated label
     const updatedEl = document.getElementById('last-updated');
-    if (data.generated_at) {
-      updatedEl.textContent = formatTimestamp(data.generated_at);
-    }
+    const updatedLabel = resolveUpdatedLabel(data);
+    if (updatedLabel) updatedEl.textContent = updatedLabel;
 
     const accuracy = data.accuracy || {};
     const cards = [];
