@@ -9,8 +9,9 @@ Usage:
     python3 build_dashboard.py --template path/to/template.html --output path/to/built.html
 
 By default reads:
-    template:  ./data/kalshi_dashboard.html   (in-place edit)
+    template:  ./templates/kalshi_dashboard.html
     snapshot:  ./data/snapshot.json
+    output:    ./data/kalshi_dashboard.html
 
 You can also pipe the export → build into one command:
     python3 kalshi_export.py --write && python3 build_dashboard.py
@@ -25,8 +26,9 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-DEFAULT_TEMPLATE = os.path.join(HERE, "data", "kalshi_dashboard.html")
+DEFAULT_TEMPLATE = os.path.join(HERE, "templates", "kalshi_dashboard.html")
 DEFAULT_SNAPSHOT = os.path.join(HERE, "data", "snapshot.json")
+DEFAULT_OUTPUT = os.path.join(HERE, "data", "kalshi_dashboard.html")
 
 # Matches:  const data = {...anything that isn't a closing-};-on-its-own...};
 # Non-greedy, multi-line. Anchored on the start of a line so we don't accidentally
@@ -83,6 +85,7 @@ def build(template_path, snapshot_path, output_path):
         print("WARNING: 'Generated: …' timestamp not found in template — left as-is.",
               file=sys.stderr)
 
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
     with open(output_path, "w") as f:
         f.write(new_html)
 
@@ -105,16 +108,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Inline snapshot.json into the dashboard HTML.")
     parser.add_argument("--template", default=DEFAULT_TEMPLATE,
-                        help=f"path to dashboard HTML (default: {DEFAULT_TEMPLATE})")
+                        help=f"path to dashboard HTML template (default: {DEFAULT_TEMPLATE})")
     parser.add_argument("--snapshot", default=DEFAULT_SNAPSHOT,
                         help=f"path to snapshot.json (default: {DEFAULT_SNAPSHOT})")
-    parser.add_argument("--output", default=None,
-                        help="output path (default: in-place edit of template)")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT,
+                        help=f"output path (default: {DEFAULT_OUTPUT})")
     args = parser.parse_args()
 
     template = os.path.expanduser(args.template)
     snapshot = os.path.expanduser(args.snapshot)
-    output = os.path.expanduser(args.output) if args.output else template
+    output = os.path.expanduser(args.output)
 
     return build(template, snapshot, output)
 

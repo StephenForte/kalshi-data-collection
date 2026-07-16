@@ -192,8 +192,13 @@ class TestMain:
 
     def test_default_paths(self):
         """Should use default paths."""
-        assert build_dashboard.DEFAULT_TEMPLATE.endswith("kalshi_dashboard.html")
+        assert build_dashboard.DEFAULT_TEMPLATE.endswith(
+            os.path.join("templates", "kalshi_dashboard.html")
+        )
         assert build_dashboard.DEFAULT_SNAPSHOT.endswith("snapshot.json")
+        assert build_dashboard.DEFAULT_OUTPUT.endswith(
+            os.path.join("data", "kalshi_dashboard.html")
+        )
 
     def test_expanduser_in_paths(self, monkeypatch, tmp_path):
         """Should expand ~ in paths."""

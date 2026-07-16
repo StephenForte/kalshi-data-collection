@@ -442,6 +442,7 @@ class TestWriteSnapshot:
         mock_build_dashboard = MagicMock()
         mock_build_dashboard.build = MagicMock()
         mock_build_dashboard.DEFAULT_TEMPLATE = str(tmp_path / "template.html")
+        mock_build_dashboard.DEFAULT_OUTPUT = str(tmp_path / "data" / "kalshi_dashboard.html")
         sys.modules["build_dashboard"] = mock_build_dashboard
 
         try:

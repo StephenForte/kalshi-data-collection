@@ -18,6 +18,7 @@ import os
 import sys
 import json
 import sqlite3
+import time
 import requests
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
@@ -64,79 +65,112 @@ MARKET_CONFIG = {
 }
 
 
-# ── FRED API (unchanged) ──────────────────────────────────────────────────────
+# ── FRED API ──────────────────────────────────────────────────────────────────
+
+_FRED_CACHE = {}  # series_id -> {date: value}; fetched once per run (avoids 429s)
 
 def fetch_fred_series(series_id, observation_start="2020-01-01"):
-    """Fetch all observations for a FRED series. Returns list of (date, value)."""
+    """Fetch all observations for a FRED series once, cached. Returns {date: value}."""
+    if series_id in _FRED_CACHE:
+        return _FRED_CACHE[series_id]
     params = {
-        "series_id":          series_id,
-        "api_key":            FRED_API_KEY,
-        "file_type":          "json",
-        "observation_start":  observation_start,
-        "sort_order":         "asc",
+        "series_id":         series_id,
+        "api_key":           FRED_API_KEY,
+        "file_type":         "json",
+        "observation_start": observation_start,
+        "sort_order":        "asc",
     }
-    resp = requests.get(FRED_BASE_URL, params=params)
+    resp = None
+    for attempt in range(4):
+        resp = requests.get(FRED_BASE_URL, params=params, timeout=30)
+        if resp.status_code != 429:
+            break
+        time.sleep(2 ** attempt)            # 1s, 2s, 4s, 8s backoff on rate limit
     resp.raise_for_status()
-    observations = resp.json().get("observations", [])
-    result = []
-    for obs in observations:
-        if obs.get("value") != ".":  # FRED uses "." for missing
+    obs = {}
+    for o in resp.json().get("observations", []):
+        if o.get("value") != ".":            # FRED uses "." for missing
             try:
-                result.append((obs["date"], float(obs["value"])))
+                obs[o["date"]] = float(o["value"])
             except (ValueError, KeyError):
                 continue
-    return result
+    _FRED_CACHE[series_id] = obs
+    return obs
 
 
-def get_fred_value(series_id, release_date_str, transform):
+# ── FRED reference-date mapping ───────────────────────────────────────────────
+
+_MONTHS = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
+           "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+
+def _obs_date(year, month):
+    return f"{year:04d}-{month:02d}-01"
+
+def _prev_month(date_str):
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    return _obs_date(d.year - 1, 12) if d.month == 1 else _obs_date(d.year, d.month - 1)
+
+def _same_month_prev_year(date_str):
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    return _obs_date(d.year - 1, d.month)
+
+def reference_obs_date(market_type, contract_code):
     """
-    Return the realized value for a given release date after applying transform.
-    release_date_str: "YYYY-MM-DD"
+    Map a Kalshi contract code to its FRED reference observation date (YYYY-MM-01).
+    CPI / Core_CPI_MoM / Payrolls: suffix '26APR' is the DATA month -> 2026-04-01.
+    GDP: suffix '26APR30' is the advance-estimate release month; the reference
+         quarter is the one ending the month before -> 2026-01-01.
     """
-    observations = fetch_fred_series(series_id)
-    if not observations:
+    suffix = contract_code.split("-")[-1]        # '26APR' or '26APR30'
+    try:
+        year  = 2000 + int(suffix[:2])
+        month = _MONTHS[suffix[2:5]]
+    except (ValueError, KeyError):
+        return None
+    if market_type == "GDP":
+        qmap = {1: (year - 1, 10), 4: (year, 1), 7: (year, 4), 10: (year, 7)}
+        if month not in qmap:
+            return None
+        return _obs_date(*qmap[month])
+    return _obs_date(year, month)
+
+
+def get_fred_value(series_id, ref_date, transform):
+    """
+    Realized FRED value for an exact reference observation date (YYYY-MM-01).
+    Looks up current and prior periods BY DATE, not by list position (which the
+    missing Oct-2025 row would shift). Returns None when a required observation
+    isn't published yet, so the event defers to a later run instead of grabbing
+    a stale month.
+    """
+    obs = fetch_fred_series(series_id)
+    if not obs or ref_date is None:
         return None
 
-    release_date = datetime.strptime(release_date_str, "%Y-%m-%d").date()
-
-    target_idx = None
-    for i, (date_str, _) in enumerate(observations):
-        obs_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        if obs_date <= release_date:
-            target_idx = i
-        else:
-            break
-
-    if target_idx is None:
-        return None
-
-    _, current_value = observations[target_idx]
+    current = obs.get(ref_date)
+    if current is None:
+        return None                              # reference month not out yet -> defer
 
     if transform == "level":
-        return round(current_value, 4)
+        return round(current, 4)
 
-    elif transform == "yoy":
-        if target_idx < 12:
+    if transform == "yoy":
+        prior = obs.get(_same_month_prev_year(ref_date))
+        if not prior:
             return None
-        _, prior_value = observations[target_idx - 12]
-        if prior_value == 0:
-            return None
-        return round(((current_value - prior_value) / prior_value) * 100, 4)
+        return round((current - prior) / prior * 100, 4)
 
-    elif transform == "mom":
-        if target_idx < 1:
+    if transform == "mom":
+        prior = obs.get(_prev_month(ref_date))
+        if not prior:
             return None
-        _, prior_value = observations[target_idx - 1]
-        if prior_value == 0:
-            return None
-        return round(((current_value - prior_value) / prior_value) * 100, 4)
+        return round((current - prior) / prior * 100, 4)
 
-    elif transform == "mom_jobs":
-        if target_idx < 1:
+    if transform == "mom_jobs":
+        prior = obs.get(_prev_month(ref_date))
+        if prior is None:
             return None
-        _, prior_value = observations[target_idx - 1]
-        change_thousands = current_value - prior_value
-        return round(change_thousands * 1000, 0)
+        return round((current - prior) * 1000, 0)
 
     return None
 
@@ -365,9 +399,17 @@ def run(dry_run=False):
             print(f"  Kalshi avg ({PRE_RELEASE_WINDOW_HOURS}h pre-release): {kalshi_avg}")
 
             config = MARKET_CONFIG[market_type]
-            actual_value = get_fred_value(config["fred_series"], release_date, config["transform"])
+            ref_date = reference_obs_date(market_type, contract_series)
+            print(f"  FRED reference obs: {ref_date}")
+            try:
+                actual_value = get_fred_value(config["fred_series"], ref_date, config["transform"])
+            except requests.exceptions.RequestException as e:
+                print(f"  FRED request failed ({e}) — skipping\n")
+                results["skipped_no_data"] += 1
+                continue
+            
             if actual_value is None:
-                print(f"  FRED returned no data for {release_date} — skipping\n")
+                print(f"  FRED returned no data for {ref_date} — skipping\n")
                 results["skipped_no_data"] += 1
                 continue
             print(f"  FRED actual value: {actual_value} {config['units']}")
