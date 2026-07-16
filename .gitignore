@@ -11,3 +11,8 @@ CLAUDE OUTPUTS/
 db/
 archive/
 data/snapshot.json # also worth ignoring
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
