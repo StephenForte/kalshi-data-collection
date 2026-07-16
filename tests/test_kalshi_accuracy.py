@@ -13,24 +13,32 @@ import responses
 import kalshi_accuracy
 
 
+@pytest.fixture(autouse=True)
+def clear_fred_cache():
+    """fetch_fred_series caches by series_id; isolate tests from each other."""
+    kalshi_accuracy._FRED_CACHE.clear()
+    yield
+    kalshi_accuracy._FRED_CACHE.clear()
+
+
 class TestFetchFredSeries:
     """Tests for fetch_fred_series function."""
 
     @responses.activate
     def test_valid_response(self, mock_env_vars, sample_fred_response):
-        """Should fetch and parse FRED observations."""
+        """Should fetch and parse FRED observations into a date->value map."""
         responses.add(
             responses.GET,
             "https://api.stlouisfed.org/fred/series/observations",
             json=sample_fred_response,
             status=200,
         )
-        
+
         result = kalshi_accuracy.fetch_fred_series("CPIAUCSL")
-        
+
         assert len(result) == 13
-        assert result[0] == ("2024-01-01", 308.417)
-        assert result[-1] == ("2025-01-01", 316.615)
+        assert result["2024-01-01"] == 308.417
+        assert result["2025-01-01"] == 316.615
 
     @responses.activate
     def test_missing_values_filtered(self, mock_env_vars):
@@ -47,12 +55,10 @@ class TestFetchFredSeries:
             },
             status=200,
         )
-        
+
         result = kalshi_accuracy.fetch_fred_series("TEST")
-        
-        assert len(result) == 2
-        assert result[0][0] == "2024-01-01"
-        assert result[1][0] == "2024-03-01"
+
+        assert result == {"2024-01-01": 100.0, "2024-03-01": 102.0}
 
     @responses.activate
     def test_invalid_values_filtered(self, mock_env_vars):
@@ -69,24 +75,57 @@ class TestFetchFredSeries:
             },
             status=200,
         )
-        
+
         result = kalshi_accuracy.fetch_fred_series("TEST")
-        
-        assert len(result) == 2
+
+        assert result == {"2024-01-01": 100.0, "2024-03-01": 102.0}
 
     @responses.activate
     def test_empty_response(self, mock_env_vars):
-        """Should return empty list for empty response."""
+        """Should return empty dict for empty response."""
         responses.add(
             responses.GET,
             "https://api.stlouisfed.org/fred/series/observations",
             json={"observations": []},
             status=200,
         )
-        
+
         result = kalshi_accuracy.fetch_fred_series("TEST")
-        
-        assert result == []
+
+        assert result == {}
+
+    @responses.activate
+    def test_uses_cache(self, mock_env_vars):
+        """Second call for the same series should not hit the network."""
+        responses.add(
+            responses.GET,
+            "https://api.stlouisfed.org/fred/series/observations",
+            json={"observations": [{"date": "2025-01-01", "value": "1.0"}]},
+            status=200,
+        )
+
+        first = kalshi_accuracy.fetch_fred_series("CACHED")
+        second = kalshi_accuracy.fetch_fred_series("CACHED")
+
+        assert first == second == {"2025-01-01": 1.0}
+        assert len(responses.calls) == 1
+
+
+class TestReferenceObsDate:
+    """Tests for reference_obs_date mapping."""
+
+    def test_cpi_month_suffix(self):
+        assert kalshi_accuracy.reference_obs_date("CPI", "KXCPIYOY-26APR") == "2026-04-01"
+
+    def test_payrolls_month_suffix(self):
+        assert kalshi_accuracy.reference_obs_date("Payrolls", "KXPAY-25JAN") == "2025-01-01"
+
+    def test_gdp_advance_estimate_maps_to_prior_quarter(self):
+        # April advance estimate covers Q1 ending January
+        assert kalshi_accuracy.reference_obs_date("GDP", "KXGDP-26APR30") == "2026-01-01"
+
+    def test_invalid_suffix(self):
+        assert kalshi_accuracy.reference_obs_date("CPI", "BAD") is None
 
 
 class TestGetFredValue:
@@ -94,7 +133,7 @@ class TestGetFredValue:
 
     @responses.activate
     def test_level_transform(self, mock_env_vars):
-        """Level transform should return raw value."""
+        """Level transform should return raw value for the exact ref date."""
         responses.add(
             responses.GET,
             "https://api.stlouisfed.org/fred/series/observations",
@@ -106,9 +145,9 @@ class TestGetFredValue:
             },
             status=200,
         )
-        
-        result = kalshi_accuracy.get_fred_value("TEST", "2025-01-15", "level")
-        
+
+        result = kalshi_accuracy.get_fred_value("TEST", "2025-01-01", "level")
+
         assert result == 2.8
 
     @responses.activate
@@ -120,9 +159,9 @@ class TestGetFredValue:
             json=sample_fred_response,
             status=200,
         )
-        
-        result = kalshi_accuracy.get_fred_value("CPIAUCSL", "2025-01-15", "yoy")
-        
+
+        result = kalshi_accuracy.get_fred_value("CPIAUCSL", "2025-01-01", "yoy")
+
         # (316.615 - 308.417) / 308.417 * 100 ≈ 2.66%
         assert result is not None
         assert 2.0 < result < 3.0
@@ -136,9 +175,9 @@ class TestGetFredValue:
             json=sample_fred_response,
             status=200,
         )
-        
-        result = kalshi_accuracy.get_fred_value("CPILFESL", "2025-01-15", "mom")
-        
+
+        result = kalshi_accuracy.get_fred_value("CPILFESL", "2025-01-01", "mom")
+
         # (316.615 - 312.798) / 312.798 * 100 ≈ 1.22%
         assert result is not None
 
@@ -156,9 +195,9 @@ class TestGetFredValue:
             },
             status=200,
         )
-        
-        result = kalshi_accuracy.get_fred_value("PAYEMS", "2025-01-15", "mom_jobs")
-        
+
+        result = kalshi_accuracy.get_fred_value("PAYEMS", "2025-01-01", "mom_jobs")
+
         # (158150 - 158000) * 1000 = 150000 jobs
         assert result == 150000
 
@@ -171,14 +210,32 @@ class TestGetFredValue:
             json={"observations": []},
             status=200,
         )
-        
-        result = kalshi_accuracy.get_fred_value("TEST", "2025-01-15", "level")
-        
+
+        result = kalshi_accuracy.get_fred_value("TEST", "2025-01-01", "level")
+
+        assert result is None
+
+    @responses.activate
+    def test_missing_ref_date_defers(self, mock_env_vars):
+        """Should return None when the exact reference month is not published."""
+        responses.add(
+            responses.GET,
+            "https://api.stlouisfed.org/fred/series/observations",
+            json={
+                "observations": [
+                    {"date": "2024-12-01", "value": "2.5"},
+                ]
+            },
+            status=200,
+        )
+
+        result = kalshi_accuracy.get_fred_value("TEST", "2025-01-01", "level")
+
         assert result is None
 
     @responses.activate
     def test_insufficient_history_for_yoy(self, mock_env_vars):
-        """Should return None when insufficient history for YoY."""
+        """Should return None when prior-year month is missing."""
         responses.add(
             responses.GET,
             "https://api.stlouisfed.org/fred/series/observations",
@@ -190,9 +247,9 @@ class TestGetFredValue:
             },
             status=200,
         )
-        
-        result = kalshi_accuracy.get_fred_value("TEST", "2024-07-15", "yoy")
-        
+
+        result = kalshi_accuracy.get_fred_value("TEST", "2024-07-01", "yoy")
+
         assert result is None
 
 
