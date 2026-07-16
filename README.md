@@ -10,6 +10,17 @@ Collects and exports macro market data from Kalshi, then writes both detailed an
   - `Contract_Details`
   - `Dashboard_Summary`
 - Generates `data/snapshot.json` for downstream consumers
+- Builds a local HTML dashboard from `templates/kalshi_dashboard.html` → `data/kalshi_dashboard.html`
+
+## Dashboard
+
+The tracked UX template lives at `templates/kalshi_dashboard.html`. After a snapshot exists:
+
+```bash
+python3 build_dashboard.py
+```
+
+That inlines `data/snapshot.json` into `data/kalshi_dashboard.html` for offline viewing. The same template can also load `./data/snapshot.json` via fetch (GitHub Pages style).
 
 ## Requirements
 

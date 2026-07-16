@@ -1,0 +1,19 @@
+[run]
+source = .
+omit = 
+    tests/*
+    .git/*
+    data/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+show_missing = true
+precision = 2
+
+[html]
+directory = htmlcov
