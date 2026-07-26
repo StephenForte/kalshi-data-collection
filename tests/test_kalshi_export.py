@@ -487,10 +487,13 @@ class TestPushToGithub:
             json.dump({"test": True}, f)
         
         result = kalshi_export.push_to_github(str(snapshot_path))
-        
+
         assert result is False
         captured = capsys.readouterr()
-        assert "skipped" in captured.out
+        # Must land on stderr: launchd routes that to kalshi_monitor_error.log.
+        assert "SKIPPED" in captured.err
+        assert "SKIPPED" not in captured.out
+        assert kalshi_export.last_push_ok is False
 
     def test_plain_github_token_is_not_used(self, monkeypatch, tmp_path, capsys):
         """GITHUB_TOKEN alone must not authenticate; hint at the rename."""
@@ -505,15 +508,37 @@ class TestPushToGithub:
 
         assert result is False
         captured = capsys.readouterr()
-        assert "KALSHI_GITHUB_TOKEN" in captured.out
-        assert "no longer read" in captured.out
+        assert "KALSHI_GITHUB_TOKEN" in captured.err
+        assert "no longer read" in captured.err
 
     def test_file_not_found(self, monkeypatch, tmp_path, capsys):
         """Should skip push when file doesn't exist."""
         monkeypatch.setenv("KALSHI_GITHUB_TOKEN", "test-token")
         
         result = kalshi_export.push_to_github(str(tmp_path / "nonexistent.json"))
-        
+
         assert result is False
         captured = capsys.readouterr()
-        assert "not found" in captured.out
+        assert "not found" in captured.err
+
+    def test_success_reports_on_stdout_and_sets_flag(self, monkeypatch, tmp_path, capsys):
+        """A good push stays on stdout and leaves last_push_ok True."""
+        monkeypatch.setenv("KALSHI_GITHUB_TOKEN", "test-token")
+        monkeypatch.setattr(kalshi_export, "_push_to_github", lambda *a, **k: True)
+
+        result = kalshi_export.push_to_github(str(tmp_path / "snapshot.json"))
+
+        assert result is True
+        assert kalshi_export.last_push_ok is True
+        # No retry advice, and nothing on the error channel, when it worked.
+        assert capsys.readouterr().err == ""
+
+    def test_failure_prints_retry_hint(self, monkeypatch, tmp_path, capsys):
+        """A failed push must name the retry command on stderr."""
+        monkeypatch.setattr(kalshi_export, "_push_to_github", lambda *a, **k: False)
+
+        result = kalshi_export.push_to_github(str(tmp_path / "snapshot.json"))
+
+        assert result is False
+        assert kalshi_export.last_push_ok is False
+        assert "--push-only" in capsys.readouterr().err

@@ -75,6 +75,23 @@ GITHUB_PATH     = os.environ.get("KALSHI_GITHUB_PATH",   "data/snapshot.json")
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_TIMEOUT  = 10  # seconds
 
+# Outcome of the most recent push_to_github() call in this process:
+# None = never attempted, True = pushed, False = failed or skipped.
+# kalshi_monitor reads this to set its exit status — a push that fails
+# silently leaves the published dashboard stale with no other symptom.
+last_push_ok = None
+
+
+def _err(msg):
+    """
+    Report a publishing problem on stderr.
+
+    launchd routes stderr to logs/kalshi_monitor_error.log, so anything
+    written here shows up in the error log instead of being buried in the
+    ~700KB run log alongside normal output.
+    """
+    print(msg, file=sys.stderr)
+
 
 # ── DB plumbing ───────────────────────────────────────────────────────────────
 
@@ -590,14 +607,15 @@ def get_formatted_report():
     return "\n".join(lines)
 
 
-def push_to_github(local_path, commit_message=None):
+def _push_to_github(local_path, commit_message=None):
     """
     Upload local_path to GITHUB_REPO at GITHUB_PATH on GITHUB_BRANCH using
     the GitHub Contents API. Reads KALSHI_GITHUB_TOKEN from the environment.
 
     Returns True on success, False on any failure (including missing token).
-    Never raises — failures are logged so a bad push doesn't break the
-    surrounding pipeline.
+    Never raises — failures are reported so a bad push doesn't break the
+    surrounding pipeline. Call push_to_github() rather than this directly;
+    the wrapper records the outcome in last_push_ok.
     """
     import base64
     import urllib.request
@@ -605,14 +623,15 @@ def push_to_github(local_path, commit_message=None):
 
     token = os.environ.get("KALSHI_GITHUB_TOKEN")
     if not token:
-        print("  GitHub push skipped: KALSHI_GITHUB_TOKEN not set.")
+        _err("  GitHub push SKIPPED: KALSHI_GITHUB_TOKEN not set. "
+             "The published dashboard will go stale.")
         if os.environ.get("GITHUB_TOKEN"):
-            print("  (GITHUB_TOKEN is set but is no longer read — "
-                  "re-export it as KALSHI_GITHUB_TOKEN.)")
+            _err("  (GITHUB_TOKEN is set but is no longer read — "
+                 "re-export it as KALSHI_GITHUB_TOKEN.)")
         return False
 
     if not os.path.exists(local_path):
-        print(f"  GitHub push skipped: local file not found at {local_path}")
+        _err(f"  GitHub push SKIPPED: local file not found at {local_path}")
         return False
 
     with open(local_path, "rb") as f:
@@ -649,10 +668,13 @@ def push_to_github(local_path, commit_message=None):
                 body = e.read().decode("utf-8", errors="replace")[:300]
             except Exception:
                 pass
-            print(f"  GitHub push failed (GET {e.code}): {e.reason}  {body}")
+            _err(f"  GitHub push FAILED (GET {e.code}): {e.reason}  {body}")
+            if e.code in (401, 403):
+                _err("  Token rejected — check KALSHI_GITHUB_TOKEN has not "
+                     "expired and still grants 'contents: write'.")
             return False
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        print(f"  GitHub push failed (GET network): {e}")
+        _err(f"  GitHub push FAILED (GET network): {e}")
         return False
 
     # Step 2: PUT the new content
@@ -687,11 +709,30 @@ def push_to_github(local_path, commit_message=None):
             body = e.read().decode("utf-8", errors="replace")[:300]
         except Exception:
             pass
-        print(f"  GitHub push failed (PUT {e.code}): {e.reason}  {body}")
+        _err(f"  GitHub push FAILED (PUT {e.code}): {e.reason}  {body}")
+        if e.code in (401, 403):
+            _err("  Token rejected — check KALSHI_GITHUB_TOKEN has not "
+                 "expired and still grants 'contents: write'.")
         return False
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        print(f"  GitHub push failed (PUT network): {e}")
+        _err(f"  GitHub push FAILED (PUT network): {e}")
         return False
+
+
+def push_to_github(local_path, commit_message=None):
+    """
+    Push local_path to GitHub, recording the outcome in the module-level
+    last_push_ok so callers can set an exit status without having to thread a
+    return value back through write_snapshot().
+
+    Still never raises: the snapshot is already on disk by the time this runs,
+    and a publishing problem must not cost us the collected data.
+    """
+    global last_push_ok
+    last_push_ok = _push_to_github(local_path, commit_message=commit_message)
+    if not last_push_ok:
+        _err("  Retry once fixed with:  python kalshi_export.py --push-only")
+    return last_push_ok
 
 
 def write_snapshot(push=True):
@@ -746,8 +787,10 @@ if __name__ == "__main__":
         except Exception:
             pass
         push_to_github(SNAPSHOT_PATH, commit_message=f"Update snapshot.json — {gen}" if gen else None)
+        sys.exit(0 if last_push_ok else 1)
     elif "--write" in sys.argv:
         push = "--no-push" not in sys.argv
         write_snapshot(push=push)
+        sys.exit(1 if (push and not last_push_ok) else 0)
     else:
         print(get_formatted_report())

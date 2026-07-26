@@ -549,10 +549,10 @@ def run(skip_export=False):
     # the data is already safely committed to SQLite above.
     if skip_export:
         print("Export skipped (--no-export).")
-        return
+        return 0
     if not ok:
         print("Export skipped: no markets succeeded this run.")
-        return
+        return 0
 
     print(f"{'='*60}")
     print("Generating snapshot and pushing to GitHub...")
@@ -563,10 +563,21 @@ def run(skip_export=False):
     except Exception as e:
         import traceback
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        print(f"  [ERROR] {ts} | export | {e}")
+        print(f"  [ERROR] {ts} | export | {e}", file=sys.stderr)
         traceback.print_exc()
+        return 1
+
+    # The collected data is already in SQLite, so a failed push is not a lost
+    # run — but it does mean the published dashboard is now stale while every
+    # other stage above reported success. Exit non-zero so launchd records it.
+    if kalshi_export.last_push_ok is False:
+        print("Run finished, but the snapshot was NOT published.",
+              file=sys.stderr)
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
     skip_export = "--no-export" in sys.argv
-    run(skip_export=skip_export)
+    sys.exit(run(skip_export=skip_export))

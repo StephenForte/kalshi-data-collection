@@ -75,6 +75,23 @@ The token is **not** read from `GITHUB_TOKEN`. The `gh` CLI won't store its own
 credentials while that variable is set, so `gh auth login` prompts you to
 delete it — which would silently stop the dashboard from updating.
 
+### When a push fails
+
+Collected data is written to SQLite before any of this runs, so a failed push
+never costs you a run — but it does leave the published dashboard stale while
+every other stage reports success. To keep that visible:
+
+- Failure detail goes to **stderr** (`logs/kalshi_monitor_error.log` under
+  launchd), not into the multi-hundred-KB run log.
+- `kalshi_monitor.py` and `kalshi_export.py --write` / `--push-only`
+  **exit non-zero** when the push didn't land.
+
+Republish the existing snapshot without re-querying the database:
+
+```bash
+python kalshi_export.py --push-only
+```
+
 ## Run
 
 Main monitor run:
