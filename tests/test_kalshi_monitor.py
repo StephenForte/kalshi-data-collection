@@ -447,3 +447,52 @@ class TestLogError:
         captured = capsys.readouterr()
         assert "[ERROR]" in captured.out
         assert "GDP" in captured.out
+
+
+class TestRunExitStatus:
+    """
+    run() must distinguish 'collected and published' from 'collected but the
+    dashboard is now stale'. A push that fails leaves every other stage
+    reporting success, so the exit status is the only signal launchd records.
+    """
+
+    def _stub_collection(self, monkeypatch, initialized_db):
+        """Make run() collect exactly one market successfully, no API calls."""
+        monkeypatch.setattr(kalshi_monitor, "DB_PATH", initialized_db)
+        monkeypatch.setattr(kalshi_monitor, "MARKETS", [
+            {"market_type": "Recession", "series_ticker": None,
+             "direct_event": "KXNBERRECESSQ", "structure": "mutually_exclusive",
+             "multi": False},
+        ])
+        monkeypatch.setattr(kalshi_monitor, "get_event_with_markets",
+                            lambda ticker: {"event": {"event_ticker": ticker}})
+        monkeypatch.setattr(kalshi_monitor, "process_event",
+                            lambda *a, **k: None)
+
+    def test_exit_1_when_push_fails(self, monkeypatch, initialized_db, capsys):
+        """Collection succeeds, push fails -> non-zero."""
+        self._stub_collection(monkeypatch, initialized_db)
+
+        import kalshi_export
+        monkeypatch.setattr(kalshi_export, "write_snapshot", lambda push=True: {})
+        monkeypatch.setattr(kalshi_export, "last_push_ok", False)
+
+        assert kalshi_monitor.run() == 1
+        assert "NOT published" in capsys.readouterr().err
+
+    def test_exit_0_when_push_succeeds(self, monkeypatch, initialized_db, capsys):
+        """Collection and push both succeed -> zero."""
+        self._stub_collection(monkeypatch, initialized_db)
+
+        import kalshi_export
+        monkeypatch.setattr(kalshi_export, "write_snapshot", lambda push=True: {})
+        monkeypatch.setattr(kalshi_export, "last_push_ok", True)
+
+        assert kalshi_monitor.run() == 0
+        assert "NOT published" not in capsys.readouterr().err
+
+    def test_exit_0_when_export_skipped(self, monkeypatch, initialized_db):
+        """--no-export is a deliberate choice, not a failure."""
+        self._stub_collection(monkeypatch, initialized_db)
+
+        assert kalshi_monitor.run(skip_export=True) == 0
