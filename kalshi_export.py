@@ -63,8 +63,12 @@ SNAPSHOT_PATH = os.path.join(
 
 # ── GitHub push config ────────────────────────────────────────────────────────
 # Push snapshot.json to a public repo so GitHub Pages can serve it.
-# Auth uses a Personal Access Token in the GITHUB_TOKEN env var. If the
+# Auth uses a Personal Access Token in the KALSHI_GITHUB_TOKEN env var. If the
 # token is missing, the push is silently skipped (handy for local dev).
+#
+# Deliberately NOT named GITHUB_TOKEN: the `gh` CLI refuses to store its own
+# credentials while that variable is set, so `gh auth login` prompts you to
+# delete it — which silently breaks this push. Keep the KALSHI_ prefix.
 GITHUB_REPO     = os.environ.get("KALSHI_GITHUB_REPO",   "StephenForte/macro_dashboard")
 GITHUB_BRANCH   = os.environ.get("KALSHI_GITHUB_BRANCH", "main")
 GITHUB_PATH     = os.environ.get("KALSHI_GITHUB_PATH",   "data/snapshot.json")
@@ -589,7 +593,7 @@ def get_formatted_report():
 def push_to_github(local_path, commit_message=None):
     """
     Upload local_path to GITHUB_REPO at GITHUB_PATH on GITHUB_BRANCH using
-    the GitHub Contents API. Reads GITHUB_TOKEN from the environment.
+    the GitHub Contents API. Reads KALSHI_GITHUB_TOKEN from the environment.
 
     Returns True on success, False on any failure (including missing token).
     Never raises — failures are logged so a bad push doesn't break the
@@ -599,9 +603,12 @@ def push_to_github(local_path, commit_message=None):
     import urllib.request
     import urllib.error
 
-    token = os.environ.get("GITHUB_TOKEN")
+    token = os.environ.get("KALSHI_GITHUB_TOKEN")
     if not token:
-        print("  GitHub push skipped: GITHUB_TOKEN not set.")
+        print("  GitHub push skipped: KALSHI_GITHUB_TOKEN not set.")
+        if os.environ.get("GITHUB_TOKEN"):
+            print("  (GITHUB_TOKEN is set but is no longer read — "
+                  "re-export it as KALSHI_GITHUB_TOKEN.)")
         return False
 
     if not os.path.exists(local_path):
