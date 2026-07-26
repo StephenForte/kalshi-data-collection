@@ -478,9 +478,10 @@ class TestPushToGithub:
     """Tests for push_to_github function."""
 
     def test_no_token(self, monkeypatch, tmp_path, capsys):
-        """Should skip push when GITHUB_TOKEN not set."""
+        """Should skip push when KALSHI_GITHUB_TOKEN not set."""
+        monkeypatch.delenv("KALSHI_GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        
+
         snapshot_path = tmp_path / "snapshot.json"
         with open(snapshot_path, "w") as f:
             json.dump({"test": True}, f)
@@ -491,9 +492,25 @@ class TestPushToGithub:
         captured = capsys.readouterr()
         assert "skipped" in captured.out
 
+    def test_plain_github_token_is_not_used(self, monkeypatch, tmp_path, capsys):
+        """GITHUB_TOKEN alone must not authenticate; hint at the rename."""
+        monkeypatch.delenv("KALSHI_GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+        snapshot_path = tmp_path / "snapshot.json"
+        with open(snapshot_path, "w") as f:
+            json.dump({"test": True}, f)
+
+        result = kalshi_export.push_to_github(str(snapshot_path))
+
+        assert result is False
+        captured = capsys.readouterr()
+        assert "KALSHI_GITHUB_TOKEN" in captured.out
+        assert "no longer read" in captured.out
+
     def test_file_not_found(self, monkeypatch, tmp_path, capsys):
         """Should skip push when file doesn't exist."""
-        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        monkeypatch.setenv("KALSHI_GITHUB_TOKEN", "test-token")
         
         result = kalshi_export.push_to_github(str(tmp_path / "nonexistent.json"))
         

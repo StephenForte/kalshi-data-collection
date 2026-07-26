@@ -43,16 +43,37 @@ pip install -r requirements.txt
 Set these before running:
 
 - `KALSHI_API_KEY` (required)
+- `FRED_API_KEY` (required by `kalshi_accuracy.py`)
+- `KALSHI_GITHUB_TOKEN` (optional; PAT with `contents: write` on the dashboard repo — the snapshot push is skipped without it)
 - `KALSHI_DB_PATH` (optional; defaults to `~/kalshi-monitor/db/kalshi_macro_data_v2.db`)
 
 Example:
 
 ```bash
 export KALSHI_API_KEY="your_kalshi_key"
+export FRED_API_KEY="your_fred_key"
+export KALSHI_GITHUB_TOKEN="your_github_pat"
 export KALSHI_DB_PATH="~/kalshi-monitor/db/kalshi_macro_data_v2.db"
 ```
 
 The database file must already exist at `KALSHI_DB_PATH` before running the monitor or export scripts.
+
+## Publishing the snapshot
+
+`data/snapshot.json` is gitignored in this repo. It is published by uploading
+it through the GitHub Contents API to a separate public repo that GitHub Pages
+serves — see `push_to_github()` in `kalshi_export.py`. Overridable defaults:
+
+| Variable | Default |
+| --- | --- |
+| `KALSHI_GITHUB_TOKEN` | *(none — push is skipped)* |
+| `KALSHI_GITHUB_REPO` | `StephenForte/macro_dashboard` |
+| `KALSHI_GITHUB_BRANCH` | `main` |
+| `KALSHI_GITHUB_PATH` | `data/snapshot.json` |
+
+The token is **not** read from `GITHUB_TOKEN`. The `gh` CLI won't store its own
+credentials while that variable is set, so `gh auth login` prompts you to
+delete it — which would silently stop the dashboard from updating.
 
 ## Run
 
