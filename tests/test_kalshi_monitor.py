@@ -344,6 +344,26 @@ class TestKalshiHeaders:
         assert headers["Content-Type"] == "application/json"
 
 
+class TestEventIsUpcoming:
+    """Finished events stay out of the collector even if Kalshi has not finalized them."""
+
+    def test_future_strike_is_upcoming(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+        assert kalshi_monitor.event_is_upcoming({"strike_date": future}) is True
+
+    def test_past_strike_is_not_upcoming(self):
+        past = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        assert kalshi_monitor.event_is_upcoming({"strike_date": past}) is False
+
+    def test_past_close_time_is_not_upcoming_when_strike_missing(self):
+        past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        markets = [{"close_time": past, "status": "active"}]
+        assert kalshi_monitor.event_is_upcoming({}, markets) is False
+
+    def test_missing_date_stays_eligible(self):
+        assert kalshi_monitor.event_is_upcoming({}) is True
+
+
 class TestApiCalls:
     """Tests for Kalshi API calls using responses mock."""
 
@@ -368,7 +388,14 @@ class TestApiCalls:
     def test_get_active_events(self, mock_env_vars, sample_events_response, sample_event_with_markets_response):
         """Should fetch and filter active events."""
         series_ticker = "KXCPIYOY"
-        
+        # Fixture dates are historical. Selection now requires a future event.
+        sample_events_response["events"][0]["strike_date"] = (
+            datetime.now(timezone.utc) + timedelta(days=40)
+        ).isoformat()
+        sample_events_response["events"][1]["strike_date"] = (
+            datetime.now(timezone.utc) + timedelta(days=70)
+        ).isoformat()
+
         # Mock the series events list
         responses.add(
             responses.GET,
@@ -399,7 +426,13 @@ class TestApiCalls:
     def test_get_active_event(self, mock_env_vars, sample_events_response, sample_event_with_markets_response):
         """Should fetch single active event."""
         series_ticker = "KXCPIYOY"
-        
+        sample_events_response["events"][0]["strike_date"] = (
+            datetime.now(timezone.utc) + timedelta(days=40)
+        ).isoformat()
+        sample_events_response["events"][1]["strike_date"] = (
+            datetime.now(timezone.utc) + timedelta(days=70)
+        ).isoformat()
+
         responses.add(
             responses.GET,
             "https://api.elections.kalshi.com/trade-api/v2/events",
@@ -423,6 +456,34 @@ class TestApiCalls:
         
         assert event is not None
         assert "event_ticker" in event
+
+    @responses.activate
+    def test_get_active_events_skips_past_strike(self, mock_env_vars, sample_event_with_markets_response):
+        """A finalized-or-not meeting whose strike date has passed is not selected."""
+        past = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        responses.add(
+            responses.GET,
+            "https://api.elections.kalshi.com/trade-api/v2/events",
+            json={"events": [
+                {"event_ticker": "KXFEDDECISION-26OCT", "strike_date": past},
+                {"event_ticker": "KXFEDDECISION-26DEC", "strike_date": future},
+            ]},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.elections.kalshi.com/trade-api/v2/events/KXFEDDECISION-26DEC",
+            json={
+                "event": {"event_ticker": "KXFEDDECISION-26DEC", "strike_date": future},
+                "markets": sample_event_with_markets_response["markets"],
+            },
+            status=200,
+        )
+
+        events = kalshi_monitor.get_active_events("KXFEDDECISION", limit=3)
+
+        assert [e["event_ticker"] for e in events] == ["KXFEDDECISION-26DEC"]
 
 
 class TestLogError:

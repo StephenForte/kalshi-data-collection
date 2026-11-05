@@ -391,6 +391,81 @@ class TestProcessRecords:
         # Should be sorted by days_to_event
         assert result["FF_Rate"]["meetings"][0]["days_to_event"] == 30
 
+    def test_ff_rate_drops_meeting_that_already_happened(self):
+        """A days-to-event of 0 from a previous day is a finished meeting."""
+        now = datetime.now(timezone.utc)
+        last_week = (now - timedelta(days=7)).isoformat()
+        records = [
+            {
+                "market_type": "FF_Rate",
+                "contract_series": "KXFEDDECISION-26OCT",
+                "timestamp": last_week,
+                "implied_mean": 0.94,
+                "days_to_event": 0,
+                "strike_structure": "mutually_exclusive",
+            },
+            {
+                "market_type": "FF_Rate",
+                "contract_series": "KXFEDDECISION-26DEC",
+                "timestamp": now.isoformat(),
+                "implied_mean": 0.80,
+                "days_to_event": 34,
+                "strike_structure": "mutually_exclusive",
+            },
+        ]
+
+        result = kalshi_export.process_records(records, {})
+
+        tickers = [m["contract_series"] for m in result["FF_Rate"]["meetings"]]
+        assert tickers == ["KXFEDDECISION-26DEC"]
+
+    def test_ff_rate_keeps_meeting_on_decision_day(self):
+        """days_to_event hits 0 on the morning of the meeting. That card stays."""
+        now = datetime.now(timezone.utc)
+        records = [
+            {
+                "market_type": "FF_Rate",
+                "contract_series": "KXFEDDECISION-26DEC",
+                "timestamp": now.isoformat(),
+                "implied_mean": 0.80,
+                "days_to_event": 0,
+                "strike_structure": "mutually_exclusive",
+            },
+        ]
+
+        result = kalshi_export.process_records(records, {})
+
+        assert len(result["FF_Rate"]["meetings"]) == 1
+
+    def test_rolled_series_does_not_mix_into_the_current_trend(self):
+        """Once a contract rolls, the chart follows the series still being collected."""
+        now = datetime.now(timezone.utc)
+        earlier = (now - timedelta(days=6)).isoformat()
+        records = [
+            {
+                "market_type": "GDP",
+                "contract_series": "KXGDP-26OCT30",
+                "timestamp": earlier,
+                "implied_mean": 3.2,
+                "days_to_event": 0,
+                "strike_structure": "cumulative",
+            },
+            {
+                "market_type": "GDP",
+                "contract_series": "KXGDP-27JAN28",
+                "timestamp": now.isoformat(),
+                "implied_mean": 2.6,
+                "days_to_event": 84,
+                "strike_structure": "cumulative",
+            },
+        ]
+
+        result = kalshi_export.process_records(records, {})
+
+        assert result["GDP"]["contract_series"] == "KXGDP-27JAN28"
+        assert result["GDP"]["implied_mean"] == 2.6
+        assert len(result["GDP"]["trend"]) == 1
+
 
 class TestDatabaseFunctions:
     """Tests for database fetch functions."""
