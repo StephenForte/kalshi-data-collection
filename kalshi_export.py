@@ -25,6 +25,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -333,6 +335,31 @@ def build_distribution_slice(market_type, contract_rows):
 
 # ── Data Processing ───────────────────────────────────────────────────────────
 
+def _meeting_has_ended(records, now=None):
+    """
+    True when this series is a meeting that has already happened.
+
+    days_to_event is clamped at 0, so 0 means "later today" or "already
+    past". A 0 recorded on an earlier day is a meeting we have stopped
+    collecting. A 0 recorded today is decision day and stays on the board.
+    """
+    if not records:
+        return False
+    latest = max(records, key=lambda r: r.get("timestamp") or "")
+    days = latest.get("days_to_event")
+    if days is None or days > 0:
+        return False
+    now = now or datetime.now(timezone.utc)
+    ts = latest.get("timestamp") or ""
+    try:
+        snap = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if snap.tzinfo is None:
+        snap = snap.replace(tzinfo=timezone.utc)
+    return snap.date() < now.date()
+
+
 def _series_payload_from_records(records, series_code, distribution):
     """Build the per-series chunk: latest aggregates + trend + distribution."""
     records = sorted(records, key=lambda r: r.get("timestamp", ""))
@@ -381,6 +408,8 @@ def process_records(records, distributions_by_series):
         if market_type == "FF_Rate":
             meetings = []
             for series_code, recs in series_dict.items():
+                if _meeting_has_ended(recs):
+                    continue
                 contract_rows = distributions_by_series.get((market_type, series_code), [])
                 distribution = build_distribution_slice(market_type, contract_rows)
                 meetings.append(_series_payload_from_records(
@@ -407,11 +436,14 @@ def process_records(records, distributions_by_series):
 
         latest = all_records[-1]
         latest_series = latest.get("contract_series")
+        # The 14-day window still holds the contract that just rolled off.
+        # The chart and the headline both follow the series we are collecting now.
+        series_records = series_dict.get(latest_series) or all_records
 
         contract_rows = distributions_by_series.get((market_type, latest_series), [])
         distribution = build_distribution_slice(market_type, contract_rows)
 
-        payload = _series_payload_from_records(all_records, latest_series, distribution)
+        payload = _series_payload_from_records(series_records, latest_series, distribution)
         payload["label"]          = MARKET_LABELS.get(market_type, market_type)
         payload["is_probability"] = market_type in PROBABILITY_MARKETS
 
@@ -618,8 +650,6 @@ def _push_to_github(local_path, commit_message=None):
     the wrapper records the outcome in last_push_ok.
     """
     import base64
-    import urllib.request
-    import urllib.error
 
     token = os.environ.get("KALSHI_GITHUB_TOKEN")
     if not token:
@@ -648,32 +678,30 @@ def _push_to_github(local_path, commit_message=None):
 
     # Step 1: GET the file's current SHA (required to update an existing file).
     # If the file doesn't exist yet (first push), we'll create it without a SHA.
+    # requests speaks HTTP only, so a repo/path from the environment cannot
+    # be turned into a file:// read the way urllib.request.urlopen can.
     existing_sha = None
     try:
-        get_req = urllib.request.Request(
-            f"{api_url}?ref={GITHUB_BRANCH}",
+        resp = requests.get(
+            api_url,
+            params={"ref": GITHUB_BRANCH},
             headers=headers,
-            method="GET",
+            timeout=GITHUB_TIMEOUT,
         )
-        with urllib.request.urlopen(get_req, timeout=GITHUB_TIMEOUT) as resp:
-            existing = json.loads(resp.read().decode("utf-8"))
-            existing_sha = existing.get("sha")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            # File doesn't exist yet — that's fine, we'll create it
+        if resp.status_code == 404:
             existing_sha = None
         else:
-            body = ""
-            try:
-                body = e.read().decode("utf-8", errors="replace")[:300]
-            except Exception:
-                pass
-            _err(f"  GitHub push FAILED (GET {e.code}): {e.reason}  {body}")
-            if e.code in (401, 403):
-                _err("  Token rejected — check KALSHI_GITHUB_TOKEN has not "
-                     "expired and still grants 'contents: write'.")
-            return False
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+            resp.raise_for_status()
+            existing_sha = resp.json().get("sha")
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "?"
+        body = (e.response.text or "")[:300] if e.response is not None else ""
+        _err(f"  GitHub push FAILED (GET {code}): {e}  {body}")
+        if code in (401, 403):
+            _err("  Token rejected — check KALSHI_GITHUB_TOKEN has not "
+                 "expired and still grants 'contents: write'.")
+        return False
+    except requests.RequestException as e:
         _err(f"  GitHub push FAILED (GET network): {e}")
         return False
 
@@ -690,31 +718,28 @@ def _push_to_github(local_path, commit_message=None):
         payload["sha"] = existing_sha
 
     try:
-        put_req = urllib.request.Request(
+        resp = requests.put(
             api_url,
-            data=json.dumps(payload).encode("utf-8"),
+            json=payload,
             headers=headers,
-            method="PUT",
+            timeout=GITHUB_TIMEOUT,
         )
-        with urllib.request.urlopen(put_req, timeout=GITHUB_TIMEOUT) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            commit_sha = (result.get("commit") or {}).get("sha", "")[:7]
-            action = "updated" if existing_sha else "created"
-            print(f"  GitHub push OK: {action} {GITHUB_REPO}/{GITHUB_PATH} "
-                  f"@ {GITHUB_BRANCH} (commit {commit_sha})")
-            return True
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="replace")[:300]
-        except Exception:
-            pass
-        _err(f"  GitHub push FAILED (PUT {e.code}): {e.reason}  {body}")
-        if e.code in (401, 403):
+        resp.raise_for_status()
+        result = resp.json()
+        commit_sha = (result.get("commit") or {}).get("sha", "")[:7]
+        action = "updated" if existing_sha else "created"
+        print(f"  GitHub push OK: {action} {GITHUB_REPO}/{GITHUB_PATH} "
+              f"@ {GITHUB_BRANCH} (commit {commit_sha})")
+        return True
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "?"
+        body = (e.response.text or "")[:300] if e.response is not None else ""
+        _err(f"  GitHub push FAILED (PUT {code}): {e}  {body}")
+        if code in (401, 403):
             _err("  Token rejected — check KALSHI_GITHUB_TOKEN has not "
                  "expired and still grants 'contents: write'.")
         return False
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except requests.RequestException as e:
         _err(f"  GitHub push FAILED (PUT network): {e}")
         return False
 

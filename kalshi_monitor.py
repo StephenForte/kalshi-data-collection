@@ -61,16 +61,73 @@ def get_active_event(series_ticker):
     return events[0] if events else None
 
 
+def _parse_api_datetime(value):
+    """Parse a Kalshi ISO timestamp. Empty and year-0001 placeholders are missing."""
+    if not value or str(value).startswith("0001"):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def event_deadline(event, markets=None):
+    """
+    When the event happens: the event strike date, otherwise the first
+    market close or expected expiration.
+    """
+    deadline = _parse_api_datetime((event or {}).get("strike_date"))
+    if deadline:
+        return deadline
+    for market in markets or []:
+        for key in ("close_time", "expected_expiration_time"):
+            deadline = _parse_api_datetime(market.get(key))
+            if deadline:
+                return deadline
+    return None
+
+
+def event_is_upcoming(event, markets=None, now=None):
+    """
+    True when the event has not happened yet.
+
+    A missing date stays eligible so the market-status check can decide.
+    A strike or close time that has already passed is over, even if Kalshi
+    still marks a contract active while it waits to finalize.
+    """
+    now = now or datetime.now(timezone.utc)
+    deadline = event_deadline(event, markets)
+    if deadline is None:
+        return True
+    return deadline > now
+
+
 def get_active_events(series_ticker, limit=None):
     """
     Return upcoming active events for a series, sorted nearest-first.
     If limit is set, return at most that many.
+
+    Only open events are requested. Settled history (the October FOMC
+    meeting after it has occurred, for example) is not walked.
     """
     url = f"{KALSHI_BASE_URL}/events"
-    params = {"series_ticker": series_ticker, "limit": 100}
-    resp = requests.get(url, headers=kalshi_headers(), params=params)
-    resp.raise_for_status()
-    events = resp.json().get("events", [])
+    events = []
+    cursor = None
+    for _ in range(5):
+        params = {
+            "series_ticker": series_ticker,
+            "status": "open",
+            "limit": 200,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        resp = requests.get(url, headers=kalshi_headers(), params=params)
+        resp.raise_for_status()
+        payload = resp.json()
+        events.extend(payload.get("events", []))
+        cursor = payload.get("cursor") or None
+        if not cursor:
+            break
 
     if not events:
         return []
@@ -100,11 +157,18 @@ def get_active_events(series_ticker, limit=None):
     active_events = []
     for event in events_sorted:
         event_ticker = event["event_ticker"]
+        # The list payload already carries strike_date for Fed meetings.
+        # Skip a finished one before spending a request on its markets.
+        if not event_is_upcoming(event):
+            continue
         try:
             full_data = get_event_with_markets(event_ticker)
             markets = full_data.get("markets", [])
+            event_meta = full_data.get("event", event)
+            if not event_is_upcoming(event_meta, markets):
+                continue
             if any(m.get("status") == "active" for m in markets):
-                active_events.append(full_data.get("event", event))
+                active_events.append(event_meta)
                 if limit and len(active_events) >= limit:
                     break
         except Exception as e:
