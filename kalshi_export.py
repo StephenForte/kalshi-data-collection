@@ -335,29 +335,22 @@ def build_distribution_slice(market_type, contract_rows):
 
 # ── Data Processing ───────────────────────────────────────────────────────────
 
-def _meeting_has_ended(records, now=None):
+def _meeting_has_ended(records, newest_timestamp):
     """
-    True when this series is a meeting that has already happened.
+    True when this meeting has stopped updating while others are still collected.
 
-    days_to_event is clamped at 0, so 0 means "later today" or "already
-    past". A 0 recorded on an earlier day is a meeting we have stopped
-    collecting. A 0 recorded today is decision day and stays on the board.
+    days_to_event hits 0 for any event under 24 hours away, including one
+    that is still tomorrow. A previous-day 0 is not enough to drop it. The
+    meeting stays unless a later snapshot exists for a meeting we are still
+    collecting — that is the signal this one was left behind because it ended.
     """
-    if not records:
+    if not records or not newest_timestamp:
         return False
     latest = max(records, key=lambda r: r.get("timestamp") or "")
     days = latest.get("days_to_event")
     if days is None or days > 0:
         return False
-    now = now or datetime.now(timezone.utc)
-    ts = latest.get("timestamp") or ""
-    try:
-        snap = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if snap.tzinfo is None:
-        snap = snap.replace(tzinfo=timezone.utc)
-    return snap.date() < now.date()
+    return (latest.get("timestamp") or "") < newest_timestamp
 
 
 def _series_payload_from_records(records, series_code, distribution):
@@ -406,9 +399,13 @@ def process_records(records, distributions_by_series):
     for market_type, series_dict in by_market.items():
 
         if market_type == "FF_Rate":
+            newest_timestamp = max(
+                (r.get("timestamp") or "" for recs in series_dict.values() for r in recs),
+                default="",
+            )
             meetings = []
             for series_code, recs in series_dict.items():
-                if _meeting_has_ended(recs):
+                if _meeting_has_ended(recs, newest_timestamp):
                     continue
                 contract_rows = distributions_by_series.get((market_type, series_code), [])
                 distribution = build_distribution_slice(market_type, contract_rows)
