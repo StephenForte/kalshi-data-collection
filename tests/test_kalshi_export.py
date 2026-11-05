@@ -437,6 +437,34 @@ class TestProcessRecords:
 
         assert len(result["FF_Rate"]["meetings"]) == 1
 
+    def test_ff_rate_keeps_near_meeting_when_nothing_newer_was_collected(self):
+        """A countdown of 0 from yesterday is still live if collection has not run since."""
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        records = [
+            {
+                "market_type": "FF_Rate",
+                "contract_series": "KXFEDDECISION-26DEC",
+                "timestamp": yesterday,
+                "implied_mean": 0.80,
+                "days_to_event": 0,
+                "strike_structure": "mutually_exclusive",
+            },
+            {
+                "market_type": "FF_Rate",
+                "contract_series": "KXFEDDECISION-27JAN",
+                "timestamp": yesterday,
+                "implied_mean": 0.50,
+                "days_to_event": 40,
+                "strike_structure": "mutually_exclusive",
+            },
+        ]
+
+        result = kalshi_export.process_records(records, {})
+
+        tickers = [m["contract_series"] for m in result["FF_Rate"]["meetings"]]
+        assert "KXFEDDECISION-26DEC" in tickers
+        assert "KXFEDDECISION-27JAN" in tickers
+
     def test_rolled_series_does_not_mix_into_the_current_trend(self):
         """Once a contract rolls, the chart follows the series still being collected."""
         now = datetime.now(timezone.utc)
